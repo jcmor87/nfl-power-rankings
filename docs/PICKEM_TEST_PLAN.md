@@ -19,3 +19,26 @@ Use synthetic accounts, games and test recipients in disposable environments. Pr
 - Verify DST scheduling, retries, concurrent claims and ambiguous email outcomes. Send a formatted test email only to an owner-controlled recipient and verify acceptance and inbox receipt.
 - Verify credentials and private data are absent from commits, built files and logs. Confirm realtime, aggregates and API responses cannot reveal unpublished picks. Restore a private backup in a disposable environment.
 - Test iPhone, iPad and desktop layouts, all Power Rankings filters, and navigation persistence when the rankings dashboard is regenerated.
+
+## Repeatable Supabase Auth and REST integration
+
+Use a separate, disposable Supabase project with no existing Auth accounts or Pick’em records, or an isolated local Supabase stack. Apply both reviewed migrations. Disable public signup and anonymous sign-ins and keep Email enabled. No competition mail or SMTP is needed. The harness provisions confirmed accounts through the Auth Admin API and uses their actual password sessions for verification.
+
+Run [tests/supabase-live.mjs](../tests/supabase-live.mjs) with Node.js 20+ from a trusted shell or private runner. Provide these environment variables through the runner or a protected local environment. Keep values out of source control and logs.
+
+| Variable | Value |
+| --- | --- |
+| `PICKEM_TEST_URL` | Disposable project URL |
+| `PICKEM_TEST_CONFIRM_ORIGIN` | The same project origin without a trailing slash |
+| `PICKEM_TEST_PUBLIC_KEY` | Project publishable key or legacy anon key |
+| `PICKEM_TEST_SERVICE_KEY` | Backend secret key or legacy service-role key |
+
+```sh
+node tests/supabase-live.mjs
+```
+
+The harness refuses a nonempty project, creates two linked synthetic participants plus one unlinked identity, and cleans up its records and Auth users in reverse order. The synthetic week exists only in the disposable environment. If execution is interrupted before cleanup, inspect the disposable project and clear only the listed fixtures or discard that disposable project before rerunning.
+
+The suite checks API write denial, restricted columns, pick privacy during scheduled and in-progress states and unverified finals, disclosure after verified final, immediate revocation with the existing access token, and concurrent upserts. It submits a pick before kickoff and repeats immediately after crossing the observed server deadline. Network timing cannot assert exact microsecond equality with the database clock.
+
+November 24, 2026 verification used disposable PostgreSQL 17, Supabase Auth (GoTrue 2.185.0), and PostgREST 13.0.7. Auth tokens came from password sign-in. The hosted Supabase gateway and the owner’s project were outside this test run.

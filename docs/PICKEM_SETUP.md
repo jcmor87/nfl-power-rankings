@@ -2,6 +2,8 @@
 
 The existing free Supabase project is `nfl-family-pickem`. Review the draft SQL before applying it. Phase 1 does not need live credentials or real competition participants. Complete the production steps only after their corresponding implementation and acceptance checks.
 
+For the browser-only installation, follow [Install Pick’em from an iPad](PICKEM_IPAD_SETUP.md). That path records both migrations for future CLI use.
+
 ## 1. Configure Auth
 
 1. Open [Supabase Dashboard](https://supabase.com/dashboard), select `nfl-family-pickem`, and confirm the project name and project reference in project settings.

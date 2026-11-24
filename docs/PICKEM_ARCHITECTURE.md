@@ -38,3 +38,7 @@ The [official NFL schedule](https://www.nfl.com/schedules/) was reachable. The t
 Later scoring must award one point per correct winner, zero for missed or tied games, and exclude canceled games. Reconcile complete expected matchup sets before finalizing weeks. Keep scoring provisional for incomplete weeks, retain historical results, and recompute from canonical games and picks when an official result changes.
 
 Week 12 is the upcoming full-week candidate as of November 24. If production readiness misses its first kickoff, obtain explicit approval for the next eligible full week and reverify its schedule before activation.
+
+## Phase 2 source follow-up
+
+The direct NFL weekly schedule route and nflverse’s published release were subsequently validated for 2026 Weeks 12 and 13. The [nflverse evaluation](PICKEM_NFLVERSE.md) records the licensing basis, historical schedule and score samples, status gaps and manual official fallback.
