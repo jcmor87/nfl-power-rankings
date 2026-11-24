@@ -1,0 +1,9 @@
+# Pick’em security
+
+The static client is public. Authorization derives from `auth.uid()` and a linked, active participant row. JWT user metadata and device time play no role. Anonymous clients have no grants on competition tables. Authenticated clients have limited read grants and RLS applies to every competition table. Query the participant directory with explicit columns `id,display_name`; the API has no access to authentication IDs or seat and enrollment fields. Participant email addresses remain in Auth.
+
+Only `submit_pick` can write picks on behalf of participants. It locks the participant, then the game, then the week, reads the database clock and checks week status, kickoff, start state and team membership. Pick updates use an upsert under a one-row-per-game key. Future job transactions that touch multiple such records should use compatible lock order or retry serialization/deadlock failures. Preserve an observed `started_at` through reschedules and corrections.
+
+RLS allows participants to read their own picks and peers’ picks after the relevant game is final and a trusted writer has set `final_verified_at`. A premature verification cannot be undone for someone who already saw the picks. Keep the verification step separate from normalization. Phase 1 adds no aggregate views, realtime publication or results grants. Future rankings, pick counts and email summaries must only derive participant-visible information from verified final games.
+
+Service credentials bypass RLS. Keep them in owner-controlled administration or reviewed backend automation. Avoid printing payloads with addresses, tokens or participant-specific data in Actions logs or storing them in audit metadata. The operational tables have no participant-facing access. Review RLS and grants using the public API roles before deploying an API client.
