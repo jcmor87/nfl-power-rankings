@@ -11,6 +11,35 @@ const state = { generation: 0 };
 let poll;
 let timer;
 let loadVersion = 0;
+let refreshingGeneration;
+
+class RequestFailure extends Error {
+  constructor(operation, kind, status) {
+    super(kind);
+    this.operation = operation;
+    this.kind = kind;
+    this.status = status;
+  }
+}
+
+function reportFailure(message, operation, error) {
+  const kinds = ['TypeError', 'RangeError', 'SyntaxError', 'ReferenceError', 'AbortError'];
+  const kind = error instanceof RequestFailure ? error.kind :
+    kinds.includes(error?.name) ? error.name : 'Error';
+  const target = error instanceof RequestFailure ? error.operation : operation;
+  const detail = target + ' · ' + kind +
+    (error instanceof RequestFailure && error.status ? ' (HTTP ' + error.status + ')' : '');
+  // Never log the error object, request URL/query, response data, or exception message.
+  console.warn('Pick’em: ' + detail);
+  byId('status').textContent = message + ' (' + detail + ')';
+}
+
+function readRows(value, operation) {
+  if (!Array.isArray(value) || value.some(row => !row || typeof row !== 'object' || Array.isArray(row))) {
+    throw new RequestFailure(operation, 'UnexpectedResponse');
+  }
+  return value;
+}
 
 function element(tag, text) {
   const node = document.createElement(tag);
@@ -30,16 +59,32 @@ async function call(config, path, { token, body } = {}) {
   const headers = { apikey: config.key };
   if (token) headers.Authorization = 'Bearer ' + token;
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  const response = await fetch(config.url + path, {
-    method: body === undefined ? 'GET' : 'POST', headers,
-    body: body === undefined ? undefined : JSON.stringify(body), redirect: 'error',
-    cache: 'no-store', signal: AbortSignal.timeout(12_000),
-  });
-  if (!response.ok) throw Object.assign(new Error('Request failed'), { status: response.status });
-  return response.status === 204 ? null : response.json();
+  const operation = path.split('?')[0];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(config.url + path, {
+      method: body === undefined ? 'GET' : 'POST', headers,
+      body: body === undefined ? undefined : JSON.stringify(body), redirect: 'error',
+      cache: 'no-store', signal: controller.signal,
+    });
+    if (!response.ok) throw new RequestFailure(operation, 'HTTPError', response.status);
+    if (response.status === 204) return null;
+    try {
+      return await response.json();
+    } catch {
+      throw new RequestFailure(operation, controller.signal.aborted ? 'Timeout' : 'InvalidJSON');
+    }
+  } catch (error) {
+    if (error instanceof RequestFailure) throw error;
+    throw new RequestFailure(operation, controller.signal.aborted ? 'Timeout' : 'NetworkError');
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 const rest = (path, body) => call(state.config, '/rest/v1/' + path, { token: state.token, body });
+const restRows = async (path, body) => readRows(await rest(path, body), '/rest/v1/' + path.split('?')[0]);
 
 function closeSession(message = '') {
   clearInterval(poll);
@@ -53,51 +98,69 @@ function closeSession(message = '') {
   byId('access').hidden = false;
   byId('board').hidden = true;
   byId('exit').hidden = true;
-  byId('games').replaceChildren();
-  byId('results').replaceChildren();
-  byId('week').replaceChildren();
+  byId('games').textContent = '';
+  byId('results').textContent = '';
+  byId('week').textContent = '';
+  byId('participant-name').textContent = '';
   byId('pick-status').textContent = '';
   byId('status').textContent = message;
 }
 
 async function refresh() {
   const generation = state.generation;
+  if (refreshingGeneration === generation) return;
+  refreshingGeneration = generation;
+  let operation = 'refresh-competition';
   try {
     if (Date.now() >= state.expiry) return closeSession('Session expired. Sign in again.');
-    const [identity] = await rest('rpc/pickem_identity', {});
+    const [identity] = await restRows('rpc/pickem_identity', {});
     if (state.generation !== generation) return;
     if (!identity) return closeSession('This account does not have Pick’em access.');
+    const serverTime = Date.parse(identity.server_time);
+    if (typeof identity.participant_id !== 'string' || !Number.isFinite(serverTime)) {
+      throw new RequestFailure('/rest/v1/rpc/pickem_identity', 'UnexpectedResponse');
+    }
     state.identity = identity.participant_id;
-    state.clockOffset = Date.parse(identity.server_time) - Date.now();
+    state.clockOffset = serverTime - Date.now();
     const [weeks, seasons, directory] = await Promise.all([
-      rest('weeks?select=id,season_id,week_number,status&status=neq.planned&order=week_number.desc'),
-      rest('seasons?select=id,nfl_year&order=nfl_year.desc'),
-      rest('participants?select=id,display_name'),
+      restRows('weeks?select=id,season_id,week_number,status&status=neq.planned&order=week_number.desc'),
+      restRows('seasons?select=id,nfl_year&order=nfl_year.desc'),
+      restRows('participants?select=id,display_name'),
     ]);
     if (state.generation !== generation) return;
     // Hosted runs use a separate fixture season. Its rows are shown only in this private preview.
     state.weeks = weeks.sort((a, b) => b.season_id - a.season_id || b.week_number - a.week_number);
     state.seasons = seasons;
     state.names = new Map(directory.map(row => [row.id, row.display_name]));
+    const name = state.names.get(state.identity);
+    if (typeof name !== 'string' || !name.trim()) {
+      throw new RequestFailure('/rest/v1/participants', 'UnexpectedResponse');
+    }
+    byId('participant-name').textContent = 'Signed in as ' + name;
+    operation = 'set-week-options';
     setWeekOptions();
     await loadWeek();
   } catch (error) {
     if (state.generation !== generation) return;
     if (error.status === 401) return closeSession('Session expired. Sign in again.');
     if (error.status === 403) return closeSession('This account does not have Pick’em access.');
-    byId('status').textContent = 'Could not load competition data. Retrying shortly.';
+    reportFailure('Could not load competition data. Retrying shortly.', operation, error);
+  } finally {
+    if (refreshingGeneration === generation) refreshingGeneration = undefined;
   }
 }
 
 function setWeekOptions() {
   const select = byId('week');
   const current = select.value;
-  select.replaceChildren(...state.weeks.map(week => {
+  const options = state.weeks.map(week => {
     const year = state.seasons.find(season => season.id === week.season_id)?.nfl_year;
     const option = element('option', year + ' · Week ' + week.week_number);
     option.value = String(week.id);
     return option;
-  }));
+  });
+  select.textContent = '';
+  for (const option of options) select.appendChild(option);
   if (state.weeks.some(week => String(week.id) === current)) select.value = current;
   select.disabled = !state.weeks.length;
 }
@@ -105,40 +168,43 @@ function setWeekOptions() {
 async function loadWeek() {
   const generation = state.generation;
   const version = ++loadVersion;
-  const week = state.weeks.find(item => String(item.id) === byId('week').value);
-  if (!week) {
-    state.data = null;
-    render();
-    return;
-  }
-  if (state.data?.week.id !== week.id) {
-    state.data = null;
-    render();
-  }
+  let operation = 'load-week';
   try {
+    const week = state.weeks.find(item => String(item.id) === byId('week').value);
+    if (!week || state.data?.week.id !== week.id) {
+      state.data = null;
+      operation = 'render-board';
+      render();
+      if (!week) {
+        byId('status').textContent = '';
+        return;
+      }
+      operation = 'load-week';
+    }
     const [games, teams, picks, weekly, season, historyWeeks] = await Promise.all([
-      rest('games?select=id,home_team_id,away_team_id,kickoff_at,started_at,status,picks_locked_at,final_verified_at,cancellation_verified_at,home_score,away_score&week_id=eq.' + week.id + '&order=kickoff_at.asc.nullslast,id.asc'),
-      rest('teams?select=id,name'),
-      rest('picks?participant_id=eq.' + encodeURIComponent(state.identity) +
+      restRows('games?select=id,home_team_id,away_team_id,kickoff_at,started_at,status,picks_locked_at,final_verified_at,cancellation_verified_at,home_score,away_score&week_id=eq.' + week.id + '&order=kickoff_at.asc.nullslast,id.asc'),
+      restRows('teams?select=id,name'),
+      restRows('picks?participant_id=eq.' + encodeURIComponent(state.identity) +
         '&games.week_id=eq.' + week.id + '&select=game_id,team_id,games!inner(week_id)'),
-      rest('weekly_results?select=week_id,participant_id,points,rank,weeks!inner(season_id,week_number)&weeks.season_id=eq.' + week.season_id + '&order=rank.asc'),
-      rest('season_standings?select=participant_id,points,rank&season_id=eq.' + week.season_id + '&order=rank.asc'),
+      restRows('weekly_results?select=week_id,participant_id,points,rank,weeks!inner(season_id,week_number)&weeks.season_id=eq.' + week.season_id + '&order=rank.asc'),
+      restRows('season_standings?select=participant_id,points,rank&season_id=eq.' + week.season_id + '&order=rank.asc'),
       Promise.resolve(state.weeks.filter(item => item.season_id === week.season_id && item.status === 'complete')),
     ]);
     if (state.generation !== generation || version !== loadVersion) return;
     const finals = games.filter(game => game.status === 'final' && game.final_verified_at).map(game => game.id);
-    const revealed = finals.length ? await rest('picks?select=game_id,participant_id,team_id&game_id=in.(' +
+    const revealed = finals.length ? await restRows('picks?select=game_id,participant_id,team_id&game_id=in.(' +
       finals.join(',') + ')') : [];
     if (state.generation !== generation || version !== loadVersion) return;
     state.data = { week, games, teams: new Map(teams.map(team => [team.id, team.name])),
       picks: new Map(picks.map(pick => [pick.game_id, pick.team_id])), weekly, season, historyWeeks, revealed };
-    byId('status').textContent = '';
+    operation = 'render-board';
     render();
+    byId('status').textContent = '';
   } catch (error) {
     if (state.generation !== generation || version !== loadVersion) return;
     if (error.status === 401) return closeSession('Session expired. Sign in again.');
     if (error.status === 403) return closeSession('This account does not have Pick’em access.');
-    byId('status').textContent = 'Could not load this week. Retrying shortly.';
+    reportFailure('Could not load this week. Retrying shortly.', operation, error);
   }
 }
 
@@ -234,14 +300,22 @@ function render() {
   const data = state.data;
   byId('board-title').textContent = titles[state.section];
   byId('progress').textContent = '';
-  byId('games').replaceChildren();
-  byId('results').replaceChildren();
+  byId('games').textContent = '';
+  byId('results').textContent = '';
   if (!data) {
     byId('results').append(element('p', state.weeks.length ? 'Loading week…' : 'No competition weeks are available.'));
     return;
   }
   if (state.section === 'picks') renderGames(data);
   else renderResults(data);
+}
+
+function renderSafely() {
+  try {
+    render();
+  } catch (error) {
+    reportFailure('Could not display the competition.', 'render-board', error);
+  }
 }
 
 async function savePick(game, team) {
@@ -269,7 +343,7 @@ async function savePick(game, team) {
   } finally {
     if (state.generation === generation) {
       state.saving = false;
-      render();
+      renderSafely();
     }
   }
 }
@@ -309,6 +383,7 @@ byId('sign-in').addEventListener('submit', async event => {
     state.expiry = Date.now() + session.expires_in * 1000;
     state.weeks = [];
     openBoard();
+    byId('status').textContent = 'Loading competition…';
     await refresh();
     if (state.token) {
       poll = setInterval(refresh, 30_000);
@@ -317,7 +392,7 @@ byId('sign-in').addEventListener('submit', async event => {
         else if (state.section === 'picks' && state.data && !state.saving) {
           const cards = [...byId('games').children];
           if (state.data.games.some((game, i) => locked(game, state.data.week) &&
-            cards[i]?.querySelector('button:not(:disabled)'))) render();
+            cards[i]?.querySelector('button:not(:disabled)'))) renderSafely();
         }
       }, 1000);
     }
@@ -344,7 +419,7 @@ for (const button of buttons) button.addEventListener('click', () => {
   state.section = button.dataset.section;
   buttons.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
   byId('pick-status').textContent = '';
-  render();
+  renderSafely();
 });
 
 byId('demo').addEventListener('click', () => {
@@ -361,5 +436,5 @@ byId('demo').addEventListener('click', () => {
   byId('status').textContent = 'Sample matchups and teams';
   openBoard();
   setWeekOptions();
-  render();
+  renderSafely();
 });

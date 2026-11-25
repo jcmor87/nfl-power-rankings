@@ -50,3 +50,9 @@ Applied all five migrations on local PostgreSQL 17 alongside GoTrue 2.185.0 and 
 Run `node --test tests/phase3.test.mjs` for provider normalization and mail tests. Run [scoring.sql](../tests/scoring.sql) as owner in a disposable migrated test database for shared ranks, missed/tied/canceled games, postponement gating, idempotent rescoring and corrections, and mail claim retries. Its fixtures roll back. These tests passed locally. The manual preview fixture and cleanup also executed locally and retained the two Auth accounts for separate deletion.
 
 DOM checks passed for the app sections, Pacific kickoff formatting, own-pick saves, mocked sign-in/revocation response/logout, and the Power Rankings league/conference/division filters. Native iPhone/iPad layouts and the owner’s hosted gateway remain launch checks. No email transport was exercised.
+
+## Frontend empty-competition regression
+
+Run `npm ci --prefix tests` and `npm test --prefix tests`. The DOM tests exercise initial load and polling with empty PostgREST arrays, unsupported browser convenience APIs, malformed successful responses, rendering exceptions and denied identities. Diagnostics show the operation and a fixed error category. They omit response bodies, exception messages and signed-in identity data.
+
+The optional live test uses `PICKEM_FRONTEND_LOCAL_ORIGIN` with a loopback-only Auth/REST gateway backed by a disposable migrated database. Provision confirmed fixtures `synthetic-1@example.com` and `synthetic-2@example.com`, using passwords `Local-fixture-password-1!` and `Local-fixture-password-2!` only in that disposable environment. Link them to active seats 1 and 2 with display names `Synthetic A` and `Synthetic B`. Leave the seasons, weeks and games empty. The test signs in and out as each account using actual API responses. Native iPad Safari verification still requires the private preview.
