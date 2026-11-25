@@ -53,10 +53,13 @@ begin
       select e.*, c.oid, c.relrowsecurity, c.relowner
       from expected_tables e
       left join pg_class c on c.oid = to_regclass('public.' || e.name) and c.relkind = 'r'
-    ), expected_functions(signature, source_hash, is_definer, participant_exec, service_exec, defaults) as (
+    ), expected_functions(signature, source_hashes, is_definer, participant_exec, service_exec, defaults) as (
       values
-        ('pickem_private.active_participant_id()', 'fe2c6a6d427ba3aab96593e7755f3409', true, true, false, 0),
-        ('public.submit_pick(bigint,bigint)', 'a2a2b0b1eadf7c8865cb02087023f41a', true, true, false, 0)
+        ('pickem_private.active_participant_id()', array['fe2c6a6d427ba3aab96593e7755f3409'], true, true, false, 0),
+        -- The reviewed browser-installed baseline adds three blank lines.
+        ('public.submit_pick(bigint,bigint)',
+         array['a2a2b0b1eadf7c8865cb02087023f41a', '5f209ec1c6d128e96710305743f6b11a'],
+         true, true, false, 0)
     ), checks as (
       select 'Table and RLS · ' || name as check_name,
         oid is not null and coalesce(relrowsecurity, false) as passed
@@ -99,7 +102,7 @@ begin
       from tables t
       union all
       select 'Function and execution grants · ' || f.signature,
-        coalesce(md5(p.prosrc) = f.source_hash and p.prosecdef = f.is_definer
+        coalesce(md5(p.prosrc) = any(f.source_hashes) and p.prosecdef = f.is_definer
           and p.proowner = (select relowner from tables where name = 'picks')
           and 'search_path=""' = any(p.proconfig) and p.pronargdefaults = f.defaults
           and not has_function_privilege('anon', p.oid, 'EXECUTE')
