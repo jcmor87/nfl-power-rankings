@@ -23,7 +23,7 @@ const combine = (rows, csv = row) => reconcile({ ...regular, teams, observations
 test('requires all 32 distinct current team codes and stable provider IDs', () => {
   assert.equal(normalizeTeams(directory.map(row => row.abbreviation === 'LA' ? { ...row, abbreviation: 'LAR' } : row)).length, 32);
   assert.throws(() => normalizeTeams(directory.slice(1)), /Incomplete/);
-  assert.throws(() => normalizeTeams([...directory.slice(1), directory[1]]), /identity/);
+  assert.throws(() => normalizeTeams([...directory.slice(1), directory[1]]), /Duplicate NFL team abbreviation/);
 });
 
 test('pairs independent schedule identities and Eastern kickoff instants', () => {
@@ -67,12 +67,12 @@ test('paginates documented endpoints and paces bounded rate-limit and outage ret
     fetcher: async url => {
       seen.push([url, clock]);
       if (seen.length === 1) return new Response(null, { status: 429, headers: { 'retry-after': '20' } });
-      if (seen.length === 2) return Response.json({ data: directory.slice(0, 16), meta: { next_cursor: 16 } });
-      if (seen.length === 3) return Response.json({ data: directory.slice(16), meta: {} });
+      if (seen.length === 2) return Response.json({ data: [game], meta: { next_cursor: 16 } });
+      if (seen.length === 3) return Response.json({ data: [{ ...game, id: 102 }], meta: {} });
       return new Response(null, { status: 503 });
     },
   });
-  assert.equal((await client.teams()).length, 32);
+  assert.equal((await client.week(regular)).length, 2);
   assert.equal(seen[1][1], 20_000);
   assert.equal(seen[2][0].searchParams.get('cursor'), '16');
   await assert.rejects(client.week({ ...regular, phase: 'postseason' }), /HTTP 503/);
@@ -92,7 +92,7 @@ test('CLI defaults to read-only even when write credentials are configured', asy
       const url = new URL(target);
       if (options.method && options.method !== 'GET') throw new Error('Unexpected write');
       if (url.hostname === 'api.balldontlie.io' && url.pathname.endsWith('/teams')) {
-        return Response.json({ data: directory, meta: {} });
+        return Response.json({ data: directory });
       }
       if (url.hostname === 'api.balldontlie.io' && url.pathname.endsWith('/games')) {
         return Response.json({ data: [game], meta: {} });
@@ -112,4 +112,51 @@ test('CLI defaults to read-only even when write credentials are configured', asy
     mode: 'dry-run', season: 2999, phase: 'regular', week: 1, teams: 32, games: 1, statuses: { scheduled: 1 },
   });
   assert.equal(stderr, '');
+});
+
+test('Teams accepts the data-only envelope and rejects invalid directory records', async () => {
+  const load = payload => createClient({ key: 'synthetic', fetcher: async url => {
+    assert.equal(url.pathname, '/nfl/v1/teams');
+    assert.equal(url.searchParams.get('per_page'), '100');
+    assert.equal(url.searchParams.has('cursor'), false);
+    return Response.json(payload);
+  } }).teams();
+  assert.deepEqual(await load({ data: directory }), teams);
+
+  const cases = [
+    [{}, /data array/],
+    [{ data: directory.slice(1) }, /Incomplete NFL team directory: expected 32 teams, received 31/],
+    [{ data: [{ ...directory[0], id: directory[1].id }, ...directory.slice(1)] }, /Duplicate NFL team ID/],
+    [{ data: [{ ...directory[0], abbreviation: directory[1].abbreviation }, ...directory.slice(1)] }, /Duplicate NFL team abbreviation/],
+    [{ data: [null, ...directory.slice(1)] }, /Malformed NFL team record/],
+    [{ data: [{ ...directory[0], full_name: ' ' }, ...directory.slice(1)] }, /Malformed NFL team record/],
+    [{ data: [{ ...directory[0], abbreviation: 'SYN' }, ...directory.slice(1)] }, /Unexpected NFL team abbreviation/],
+    [{ data: directory, meta: { next_cursor: 32 } }, /unexpectedly contains a pagination cursor/],
+  ];
+  for (const [payload, error] of cases) await assert.rejects(load(payload), error);
+});
+
+test('Games still requires metadata and rejects invalid pagination cursors', async () => {
+  for (const [payload, error] of [
+    [{ data: [game] }, /pagination metadata/],
+    [{ data: [game], meta: [] }, /pagination metadata/],
+    [{ data: [game], meta: { next_cursor: '32' } }, /Invalid BALLDONTLIE pagination cursor/],
+  ]) {
+    const client = createClient({ key: 'synthetic', fetcher: async () => Response.json(payload) });
+    await assert.rejects(client.week(regular), error);
+  }
+});
+
+test('CLI prints a specific safe validation diagnostic without echoing provider values', async () => {
+  const cli = fileURLToPath(new URL('../pickem-jobs/sync-nfl.mjs', import.meta.url));
+  const mock = "globalThis.fetch = async () => Response.json({ data: [{ id: 1, abbreviation: 'SYNTHETIC_PRIVATE_VALUE', full_name: 'Synthetic' }] });";
+  await assert.rejects(promisify(execFile)(process.execPath, [
+    '--import', 'data:text/javascript,' + encodeURIComponent(mock), cli,
+    '--season=2999', '--week=1',
+  ], { env: { ...process.env, BALLDONTLIE_API_KEY: 'synthetic-private-key' } }), error => {
+    assert.equal(error.code, 1);
+    assert.match(error.stderr, /team validation.*Unexpected NFL team abbreviation at record 1/);
+    assert.doesNotMatch(error.stderr, /SYNTHETIC_PRIVATE_VALUE|synthetic-private-key/);
+    return true;
+  });
 });
