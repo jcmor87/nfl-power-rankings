@@ -56,3 +56,7 @@ DOM checks passed for the app sections, Pacific kickoff formatting, own-pick sav
 Run `npm ci --prefix tests` and `npm test --prefix tests`. The DOM tests exercise initial load and polling with empty PostgREST arrays, unsupported browser convenience APIs, malformed successful responses, rendering exceptions and denied identities. Diagnostics show the operation and a fixed error category. They omit response bodies, exception messages and signed-in identity data.
 
 The optional live test uses `PICKEM_FRONTEND_LOCAL_ORIGIN` with a loopback-only Auth/REST gateway backed by a disposable migrated database. Provision confirmed fixtures `synthetic-1@example.com` and `synthetic-2@example.com`, using passwords `Local-fixture-password-1!` and `Local-fixture-password-2!` only in that disposable environment. Link them to active seats 1 and 2 with display names `Synthetic A` and `Synthetic B`. Leave the seasons, weeks and games empty. The test signs in and out as each account using actual API responses. Native iPad Safari verification still requires the private preview.
+
+## Hosted runner transport regression
+
+Run `node --test tests/supabase-requests.test.mjs`. The tests cover project origin and key validation, opaque API-key and bearer headers, sanitized network/status reporting, bounded GET retries and mutation reconciliation without replay. From a private terminal, `bash tests/run-hosted.sh --preflight` runs only the read-only hosted checks.
