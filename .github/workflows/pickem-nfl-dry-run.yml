@@ -1,0 +1,96 @@
+name: Pickem NFL synchronization
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Dry run a single period or sync the family competition
+        type: choice
+        default: dry-run
+        options: [dry-run, apply]
+      periods:
+        description: Optional apply override (comma-separated season:phase:week entries)
+        type: string
+      season:
+        description: NFL season for a dry run
+        type: string
+      phase:
+        description: Competition phase for a dry run
+        type: choice
+        default: regular
+        options: [regular, postseason]
+      week:
+        description: NFL week or postseason round for a dry run
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: pickem-nfl-provider
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - env:
+          BALLDONTLIE_API_KEY: ${{ secrets.BALLDONTLIE_API_KEY }}
+          SEASON: ${{ inputs.season }}
+          PHASE: ${{ inputs.phase }}
+          WEEK: ${{ inputs.week }}
+        run: node pickem-jobs/sync-nfl.mjs --season="$SEASON" --phase="$PHASE" --week="$WEEK"
+
+  sync-production:
+    if: >-
+      github.repository == 'jcmor87/nfl-power-rankings' &&
+      github.ref == 'refs/heads/main' &&
+      vars.PICKEM_NFL_SYNC_ENABLED == 'true' &&
+      (github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.mode == 'apply'))
+    environment: pickem-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - env:
+          BALLDONTLIE_API_KEY: ${{ secrets.BALLDONTLIE_API_KEY }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          PICKEM_SYNC_CONFIRM_ORIGIN: ${{ vars.SUPABASE_URL }}
+          PERIODS: ${{ inputs.periods }}
+        run: |
+          if [[ -n "$PERIODS" ]]; then
+            node pickem-jobs/sync-nfl.mjs --apply --family --periods="$PERIODS"
+          else
+            node pickem-jobs/sync-nfl.mjs --apply --family --auto
+          fi
+
+  notify-owner:
+    needs: sync-production
+    if: always() && (needs.sync-production.result == 'failure' || needs.sync-production.result == 'cancelled' || needs.sync-production.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_RESULT: ${{ needs.sync-production.result }}
+          FULL_RUN: ${{ github.event_name == 'schedule' || inputs.periods == '' }}
+        run: bash pickem-jobs/report-sync-health.sh

@@ -1,0 +1,6 @@
+{
+  "name": "pickem-frontend-tests",
+  "private": true,
+  "scripts": { "test": "node --test frontend.test.mjs" },
+  "devDependencies": { "jsdom": "26.1.0" }
+}

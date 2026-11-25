@@ -1,0 +1,94 @@
+name: Pickem email
+on:
+  schedule:
+    # Poll after the hourly :17 NFL sync. Extra runs at the two Pacific noon UTC offsets.
+    - cron: '37 * * * *'
+    - cron: '0 19,20 * * 3'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Synthetic preview, protected owner mailbox test, or production email
+        type: choice
+        default: dry-run
+        options: [dry-run, test-sender, apply]
+permissions:
+  contents: read
+concurrency:
+  group: pickem-email
+  cancel-in-progress: false
+jobs:
+  preview:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'dry-run'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node pickem-jobs/send-pickem-mail.mjs
+  owner-test:
+    if: >-
+      github.repository == 'jcmor87/nfl-power-rankings' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch' && inputs.mode == 'test-sender' &&
+      vars.PICKEM_EMAIL_TEST_ENABLED == 'true'
+    environment: pickem-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - env:
+          PICKEM_EMAIL_TEST_ENABLED: ${{ vars.PICKEM_EMAIL_TEST_ENABLED }}
+          PICKEM_BREVO_API_KEY: ${{ secrets.PICKEM_BREVO_API_KEY }}
+          PICKEM_BREVO_SENDER: ${{ secrets.PICKEM_BREVO_SENDER }}
+        run: node pickem-jobs/send-pickem-mail.mjs --test-sender
+  mail-production:
+    if: >-
+      github.repository == 'jcmor87/nfl-power-rankings' &&
+      github.ref == 'refs/heads/main' &&
+      vars.PICKEM_EMAIL_ENABLED == 'true' &&
+      (github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.mode == 'apply'))
+    environment: pickem-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - env:
+          PICKEM_EMAIL_ENABLED: ${{ vars.PICKEM_EMAIL_ENABLED }}
+          PICKEM_BREVO_API_KEY: ${{ secrets.PICKEM_BREVO_API_KEY }}
+          PICKEM_BREVO_SENDER: ${{ secrets.PICKEM_BREVO_SENDER }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: node pickem-jobs/send-pickem-mail.mjs --apply
+  notify-owner:
+    needs: mail-production
+    if: always() && (needs.mail-production.result == 'failure' || needs.mail-production.result == 'cancelled' || needs.mail-production.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_RESULT: ${{ needs.mail-production.result }}
+          INCIDENT_SCOPE: email
+          FULL_RUN: 'true'
+        run: bash pickem-jobs/report-sync-health.sh
