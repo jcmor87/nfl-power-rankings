@@ -60,3 +60,7 @@ The optional live test uses `PICKEM_FRONTEND_LOCAL_ORIGIN` with a loopback-only 
 ## Hosted runner transport regression
 
 Run `node --test tests/supabase-requests.test.mjs`. The tests cover project origin and key validation, opaque API-key and bearer headers, sanitized network/status reporting, bounded GET retries and mutation reconciliation without replay. From a private terminal, `bash tests/run-hosted.sh --preflight` runs only the read-only hosted checks.
+
+## Phase 4 automated data integration
+
+Run `node --test tests/nfl-sync.test.mjs` for provider pagination, pacing, simulated outages, lifecycle data, reconciliation and period coverage. Run `tests/nfl-sync.sql` through `psql -v ON_ERROR_STOP=1` against a disposable database after installing Phase 4. It tests planned imports, duplicate and incomplete snapshots, synthetic lifecycle updates, kickoff and RLS behavior, correction and postseason standings, and least-privilege grants. The fixture transaction rolls back. The [Phase 4 handoff](PICKEM_PHASE4.md) distinguishes owner-run provider observations and public CSV checks from synthetic tests.

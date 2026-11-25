@@ -1,0 +1,34 @@
+name: Pickem NFL dry run
+on:
+  workflow_dispatch:
+    inputs:
+      season:
+        required: true
+        type: string
+      phase:
+        required: true
+        type: choice
+        options: [regular, postseason]
+      week:
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: pickem-nfl-provider
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - env:
+          BALLDONTLIE_API_KEY: ${{ secrets.BALLDONTLIE_API_KEY }}
+          SEASON: ${{ inputs.season }}
+          PHASE: ${{ inputs.phase }}
+          WEEK: ${{ inputs.week }}
+        run: node pickem-jobs/sync-nfl.mjs --season="$SEASON" --phase="$PHASE" --week="$WEEK"

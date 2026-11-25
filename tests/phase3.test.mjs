@@ -12,14 +12,14 @@ const status = game => normalizeGames(snapshot(game), expected)[0].status;
 
 test('provider observations fail closed for incomplete or ambiguous data', () => {
   assert.equal(status(schedule), 'scheduled');
-  assert.equal(status({ ...schedule, date: 'TBD' }), 'unknown');
+  assert.throws(() => status({ ...schedule, date: 'TBD' }));
   assert.equal(status({ ...schedule, status_state: 'suspended' }), 'suspended');
-  assert.equal(status({ ...schedule, status_state: 'canceled' }), 'canceled');
+  assert.equal(status({ ...schedule, status_state: 'canceled', home_team_score: null, visitor_team_score: null }), 'canceled');
   assert.equal(status({ ...schedule, status_state: 'postponed' }), 'postponed');
-  assert.equal(status({ ...schedule, status_state: 'abandoned' }), 'unknown');
+  assert.throws(() => status({ ...schedule, status_state: 'abandoned' }));
   assert.throws(() => normalizeGames(snapshot(schedule, { next_cursor: 55 }), expected));
   assert.throws(() => normalizeGames(snapshot({ ...schedule, id: 9 }), expected));
-  assert.equal(status({ ...schedule, status_state: 'final' }), 'unknown');
+  assert.throws(() => status({ ...schedule, status_state: 'final' }));
   const final = { ...schedule, status_state: 'final', home_team_score: 7, visitor_team_score: 0 };
   assert.equal(status(final), 'final');
   assert.equal(normalizeGames(snapshot({ ...final, home_team_score: 14 }), expected)[0].homeScore, 14);

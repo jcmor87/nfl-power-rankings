@@ -86,6 +86,25 @@ test('empty competition shows the authenticated participant and clears loading o
   });
 });
 
+test('postseason periods display round names and sort after regular-season weeks', async context => {
+  const periods = [
+    { id: 2, season_id: 1, week_number: 18, competition_phase: 'regular', status: 'complete' },
+    { id: 3, season_id: 1, week_number: 1, competition_phase: 'postseason', status: 'active' },
+  ];
+  await withApp(context, path => {
+    if (['games', 'teams', 'picks', 'weekly_results', 'season_standings']
+      .some(table => path === '/rest/v1/' + table)) return Response.json([]);
+    return answer(path, { '/rest/v1/weeks': periods, '/rest/v1/seasons': [{ id: 1, nfl_year: 2026 }] });
+  }, async app => {
+    await app.signIn();
+    const select = app.byId('week');
+    assert.deepEqual([...select.options].map(item => item.textContent),
+      ['2026 · Wild Card', '2026 · Week 18']);
+    assert.equal(select.value, '3');
+    assert.deepEqual(app.diagnostics, []);
+  });
+});
+
 test('unexpected successful response shape reports a safe operation and error category', async context => {
   let invalid = true;
   await withApp(context, path => invalid && path === '/rest/v1/weeks' ?

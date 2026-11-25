@@ -3,6 +3,10 @@ import { supabaseUrl, supabasePublishableKey } from './config.mjs';
 const byId = (id) => document.getElementById(id);
 const buttons = [...document.querySelectorAll('[data-section]')];
 const titles = { picks: 'Make Picks', weekly: 'Weekly Results', season: 'Season Standings', history: 'Competition History' };
+const roundNames = { 1: 'Wild Card', 2: 'Divisional Round', 3: 'Conference Championships', 5: 'Super Bowl' };
+const periodLabel = week => week.competition_phase === 'postseason' ? roundNames[week.week_number] : 'Week ' + week.week_number;
+const periodOrder = week => week.week_number + (week.competition_phase === 'postseason' ? 18 : 0);
+
 const pacific = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/Los_Angeles', weekday: 'short', month: 'short', day: 'numeric',
   hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
@@ -123,13 +127,13 @@ async function refresh() {
     state.identity = identity.participant_id;
     state.clockOffset = serverTime - Date.now();
     const [weeks, seasons, directory] = await Promise.all([
-      restRows('weeks?select=id,season_id,week_number,status&status=neq.planned&order=week_number.desc'),
+      restRows('weeks?select=id,season_id,week_number,competition_phase,status&status=neq.planned&order=week_number.desc'),
       restRows('seasons?select=id,nfl_year&order=nfl_year.desc'),
       restRows('participants?select=id,display_name'),
     ]);
     if (state.generation !== generation) return;
     // Hosted runs use a separate fixture season. Its rows are shown only in this private preview.
-    state.weeks = weeks.sort((a, b) => b.season_id - a.season_id || b.week_number - a.week_number);
+    state.weeks = weeks.sort((a, b) => b.season_id - a.season_id || periodOrder(b) - periodOrder(a));
     state.seasons = seasons;
     state.names = new Map(directory.map(row => [row.id, row.display_name]));
     const name = state.names.get(state.identity);
@@ -155,7 +159,7 @@ function setWeekOptions() {
   const current = select.value;
   const options = state.weeks.map(week => {
     const year = state.seasons.find(season => season.id === week.season_id)?.nfl_year;
-    const option = element('option', year + ' · Week ' + week.week_number);
+    const option = element('option', year + ' · ' + periodLabel(week));
     option.value = String(week.id);
     return option;
   });
@@ -182,7 +186,7 @@ async function loadWeek() {
       operation = 'load-week';
     }
     const [games, teams, picks, weekly, season, historyWeeks] = await Promise.all([
-      restRows('games?select=id,home_team_id,away_team_id,kickoff_at,started_at,status,picks_locked_at,final_verified_at,cancellation_verified_at,home_score,away_score&week_id=eq.' + week.id + '&order=kickoff_at.asc.nullslast,id.asc'),
+      restRows('games?select=id,home_team_id,away_team_id,kickoff_at,started_at,status,source,schedule_verified_until,picks_locked_at,final_verified_at,cancellation_verified_at,home_score,away_score&week_id=eq.' + week.id + '&order=kickoff_at.asc.nullslast,id.asc'),
       restRows('teams?select=id,name'),
       restRows('picks?participant_id=eq.' + encodeURIComponent(state.identity) +
         '&games.week_id=eq.' + week.id + '&select=game_id,team_id,games!inner(week_id)'),
@@ -209,8 +213,11 @@ async function loadWeek() {
 }
 
 function locked(game, week) {
-  return week.status !== 'active' || game.status !== 'scheduled' || game.started_at ||
-    game.picks_locked_at || !game.kickoff_at || Date.now() + state.clockOffset >= Date.parse(game.kickoff_at);
+  const serverTime = Date.now() + state.clockOffset;
+  return week.status !== 'active' ||
+    (game.source === 'balldontlie' && (!game.schedule_verified_until ||
+      serverTime >= Date.parse(game.schedule_verified_until))) || game.status !== 'scheduled' || game.started_at ||
+    game.picks_locked_at || !game.kickoff_at || serverTime >= Date.parse(game.kickoff_at);
 }
 
 function renderGames(data) {
@@ -262,12 +269,12 @@ function renderGames(data) {
 function renderResults(data) {
   const target = byId('results');
   const byWeek = id => data.weekly.filter(row => row.week_id === id);
-  const previous = data.historyWeeks.find(week => week.week_number < data.week.week_number);
+  const previous = data.historyWeeks.find(week => periodOrder(week) < periodOrder(data.week));
   if (state.section === 'history') {
     for (const week of data.historyWeeks) {
       const winners = byWeek(week.id).filter(row => row.rank === 1)
         .map(row => state.names.get(row.participant_id) ?? 'Participant');
-      if (winners.length) target.append(element('p', 'Week ' + week.week_number + ' · ' + winners.join(', ')));
+      if (winners.length) target.append(element('p', periodLabel(week) + ' · ' + winners.join(', ')));
     }
   } else {
     const rows = state.section === 'weekly' ? byWeek(data.week.id) : data.season;
