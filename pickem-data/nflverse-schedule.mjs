@@ -45,7 +45,7 @@ function kickoff(date, time) {
   return matches.length === 1 ? new Date(matches[0]).toISOString() : null;
 }
 
-export function readSchedule(csv, { season, phase, week }) {
+export function openSchedule(csv) {
   const [columns = [], ...values] = parseCsv(csv);
   const fields = ['game_id', 'season', 'game_type', 'week', 'gameday', 'gametime',
     'home_team', 'away_team', 'home_score', 'away_score'];
@@ -53,26 +53,42 @@ export function readSchedule(csv, { season, phase, week }) {
     throw new SyncValidationError('Unexpected nflverse CSV fields');
   }
   const indexes = Object.fromEntries(fields.map(name => [name, columns.indexOf(name)]));
-  const type = phase === 'regular' ? 'REG' : postseasonRounds[week].feed;
-  return values.filter(row => row[indexes.season] === String(season) &&
-    row[indexes.game_type] === type && (phase === 'postseason' || row[indexes.week] === String(week))).map(row => {
-    if (row.length !== columns.length) throw new SyncValidationError('Malformed nflverse CSV row');
-    const home = canonicalTeam(row[indexes.home_team]);
-    const away = canonicalTeam(row[indexes.away_team]);
-    const homeScore = row[indexes.home_score];
-    const awayScore = row[indexes.away_score];
-    const score = value => /^\d{1,5}$/.test(value) && Number(value) <= 32767;
-    if (!row[indexes.game_id] || !teamCodes.includes(home) || !teamCodes.includes(away) || home === away ||
-        ((homeScore || awayScore) && !(score(homeScore) && score(awayScore)))) {
-      throw new SyncValidationError('Malformed nflverse matchup or score');
+  return ({ season, phase, week }, { discovery = false } = {}) => {
+    const type = phase === 'regular' ? 'REG' : postseasonRounds[week].feed;
+    let pending = false;
+    const games = [];
+    for (const row of values) {
+      if (row[indexes.season] !== String(season) || row[indexes.game_type] !== type ||
+          (phase === 'regular' && row[indexes.week] !== String(week))) continue;
+      if (row.length !== columns.length) throw new SyncValidationError('Malformed nflverse CSV row');
+      const home = canonicalTeam(row[indexes.home_team]);
+      const away = canonicalTeam(row[indexes.away_team]);
+      const kickoffAt = kickoff(row[indexes.gameday], row[indexes.gametime]);
+      const homeScore = row[indexes.home_score];
+      const awayScore = row[indexes.away_score];
+      const score = value => /^\d{1,5}$/.test(value) && Number(value) <= 32767;
+      if (discovery && phase === 'postseason' && !homeScore && !awayScore &&
+          (!kickoffAt || ['', 'TBD'].includes(home) || ['', 'TBD'].includes(away))) {
+        pending = true;
+        continue;
+      }
+      if (!row[indexes.game_id] || !teamCodes.includes(home) || !teamCodes.includes(away) || home === away ||
+          ((homeScore || awayScore) && !(score(homeScore) && score(awayScore)))) {
+        throw new SyncValidationError('Malformed nflverse matchup or score');
+      }
+      games.push({ id: row[indexes.game_id], home, away, kickoffAt,
+        homeScore: homeScore ? Number(homeScore) : null, awayScore: awayScore ? Number(awayScore) : null });
     }
-    return { id: row[indexes.game_id], home, away, kickoffAt: kickoff(row[indexes.gameday], row[indexes.gametime]),
-      homeScore: homeScore ? Number(homeScore) : null, awayScore: awayScore ? Number(awayScore) : null };
-  });
+    return { games, pending };
+  };
 }
 
-export async function fetchSchedule(options, fetcher = fetch) {
+export function readSchedule(csv, period) {
+  return openSchedule(csv)(period).games;
+}
+
+export async function fetchScheduleReader(fetcher = fetch) {
   const response = await fetcher(scheduleRelease, { signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new SyncValidationError('nflverse HTTP ' + response.status);
-  return readSchedule(await response.text(), options);
+  return openSchedule(await response.text());
 }

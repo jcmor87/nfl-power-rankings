@@ -68,3 +68,7 @@ Run `node --test tests/nfl-sync.test.mjs` for provider pagination, pacing, simul
 ## NFL workflow regression
 
 Run `node --test tests/nfl-automation.test.mjs` with Node 22 or later. The suite checks the repository, branch, environment and scheduling gates, dry-run isolation, batch validation and provider request reuse, recovery from one period’s conflict and outage holds. It uses synthetic HTTP responses and makes no hosted writes.
+
+## Family automation regression
+
+Run `node --test tests/family-periods.test.mjs tests/nfl-automation.test.mjs` and execute `tests/family-automation.sql` against a disposable migrated database. Coverage includes the Week 13 floor, prospective activation and roster gating, pending playoff matchups, correction selection, both production write gates, lease alerts and deduplicated GitHub incidents. Notification tests use a local stub and send nothing.

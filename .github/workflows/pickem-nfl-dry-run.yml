@@ -5,10 +5,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Dry run a single period or sync the configured production periods
+        description: Dry run a single period or sync the family competition
         type: choice
         default: dry-run
         options: [dry-run, apply]
+      periods:
+        description: Optional apply override (comma-separated season:phase:week entries)
+        type: string
       season:
         description: NFL season for a dry run
         type: string
@@ -48,7 +51,8 @@ jobs:
     if: >-
       github.repository == 'jcmor87/nfl-power-rankings' &&
       github.ref == 'refs/heads/main' &&
-      ((github.event_name == 'schedule' && vars.PICKEM_NFL_SYNC_ENABLED == 'true') ||
+      vars.PICKEM_NFL_SYNC_ENABLED == 'true' &&
+      (github.event_name == 'schedule' ||
         (github.event_name == 'workflow_dispatch' && inputs.mode == 'apply'))
     environment: pickem-production
     runs-on: ubuntu-latest
@@ -65,5 +69,28 @@ jobs:
           SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           PICKEM_SYNC_CONFIRM_ORIGIN: ${{ vars.SUPABASE_URL }}
-          PERIODS: ${{ vars.PICKEM_SYNC_PERIODS }}
-        run: node pickem-jobs/sync-nfl.mjs --apply --periods="$PERIODS"
+          PERIODS: ${{ inputs.periods }}
+        run: |
+          if [[ -n "$PERIODS" ]]; then
+            node pickem-jobs/sync-nfl.mjs --apply --family --periods="$PERIODS"
+          else
+            node pickem-jobs/sync-nfl.mjs --apply --family --auto
+          fi
+
+  notify-owner:
+    needs: sync-production
+    if: always() && (needs.sync-production.result == 'failure' || needs.sync-production.result == 'cancelled' || needs.sync-production.result == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_RESULT: ${{ needs.sync-production.result }}
+          FULL_RUN: ${{ github.event_name == 'schedule' || inputs.periods == '' }}
+        run: bash pickem-jobs/report-sync-health.sh

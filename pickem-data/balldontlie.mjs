@@ -134,7 +134,7 @@ export function createClient({ key, fetcher = fetch, sleep = delay, now = Date.n
       }
       return normalizeTeams(payload?.data);
     },
-    async week({ season, phase, week }) {
+    async week({ season, phase, week, allowPending = false }) {
       const rows = await pages('games', phase === 'postseason' ?
         { 'seasons[]': season, postseason: 'true' } :
         { 'seasons[]': season, 'weeks[]': week, 'season_types[]': 2 });
@@ -144,7 +144,13 @@ export function createClient({ key, fetcher = fetch, sleep = delay, now = Date.n
           throw new SyncValidationError('Invalid BALLDONTLIE postseason inventory');
         }
       }
-      return normalizeGames({ data: phase === 'postseason' ? rows.filter(row => row.week === week) : rows, meta: {} },
+      const selected = phase === 'postseason' ? rows.filter(row => row.week === week) : rows;
+      if (phase === 'postseason' && allowPending &&
+          (selected.length < postseasonRounds[week].games ||
+            selected.some(row => ['scheduled', 'unknown'].includes(row.status_state) &&
+              row.home_team_score == null && row.visitor_team_score == null &&
+              (!row.home_team?.id || !row.visitor_team?.id)))) return null;
+      return normalizeGames({ data: selected, meta: {} },
         { season, phase, week });
     },
   };

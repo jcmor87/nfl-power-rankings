@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { createClient } from '../pickem-data/balldontlie.mjs';
-import { fetchSchedule } from '../pickem-data/nflverse-schedule.mjs';
+import { fetchScheduleReader } from '../pickem-data/nflverse-schedule.mjs';
 import { reconcile } from '../pickem-data/reconcile.mjs';
 import { SyncValidationError } from '../pickem-data/sync-validation-error.mjs';
+import { checkLeaseHealth, familySeason, inFamily, selectFamilyPeriods, periodKey } from './family-periods.mjs';
 import { validWeek } from '../pickem-data/nfl-competition.mjs';
 
 function parsePeriods(values) {
@@ -55,12 +56,19 @@ function reportFailure(stage, error, period) {
   process.exitCode = 1;
 }
 
-async function syncPeriod({ period, client, teams, apply, origin, key }) {
+async function syncPeriod({ period, client, teams, schedule, apply, family, allowPending, origin, key }) {
   let stage = 'provider schedule';
   try {
-    const observations = await client.week(period);
     stage = 'independent reconciliation';
-    const reference = await fetchSchedule(period);
+    const reference = schedule(period).games;
+    stage = 'provider schedule';
+    const observations = await client.week({ ...period, allowPending: allowPending &&
+      reference.every(game => Date.parse(game.kickoffAt) > Date.now()) });
+    if (observations === null) {
+      console.log('Waiting for postseason matchup identities for ' + periodLabel(period) + '.');
+      return;
+    }
+    stage = 'independent reconciliation';
     const snapshot = reconcile({ ...period, teams, observations, reference });
     console.log(JSON.stringify({ mode: apply ? 'apply' : 'dry-run', ...period, teams: snapshot.teams.length,
       games: snapshot.games.length,
@@ -71,7 +79,8 @@ async function syncPeriod({ period, client, teams, apply, origin, key }) {
         .map(status => [status, snapshot.games.filter(game => game.status === status).length])) }));
     if (apply) {
       stage = 'database synchronization';
-      const response = await rpc(origin, key, 'sync_pickem_nfl_week', { p_snapshot: snapshot });
+      const response = await rpc(origin, key, family ? 'sync_pickem_family_period' : 'sync_pickem_nfl_week',
+        { p_snapshot: snapshot });
       if (!response.ok) throw new SyncValidationError('Atomic database sync rejected (HTTP ' + response.status + ').');
       console.log('Atomic sync accepted for ' + periodLabel(period) + '.');
     }
@@ -81,13 +90,39 @@ async function syncPeriod({ period, client, teams, apply, origin, key }) {
   }
 }
 
+async function readDatabase(origin, key, table, query) {
+  const response = await fetch(origin + '/rest/v1/' + table + '?' + new URLSearchParams(query), {
+    headers: { apikey: key }, redirect: 'manual', signal: AbortSignal.timeout(25_000),
+  });
+  if (!response.ok) throw new SyncValidationError('Database read failed (HTTP ' + response.status + ').');
+  return response.json();
+}
+
+async function monitorLeases(origin, key) {
+  const rows = await readDatabase(origin, key, 'games', {
+    select: 'pick_deadline_at,schedule_verified_until,weeks!inner(week_number,competition_phase,seasons!inner(nfl_year))',
+    'weeks.seasons.nfl_year': 'eq.' + familySeason, 'weeks.status': 'eq.active',
+    status: 'eq.scheduled', source: 'eq.balldontlie', picks_locked_at: 'is.null',
+  });
+  if (!Array.isArray(rows)) throw new SyncValidationError('Unexpected schedule lease response.');
+  checkLeaseHealth(rows.filter(row => inFamily({
+    season: familySeason, phase: row.weeks?.competition_phase, week: row.weeks?.week_number,
+  })), Date.now());
+}
+
 async function main() {
   const { values } = parseArgs({ options: {
     season: { type: 'string' }, phase: { type: 'string' }, week: { type: 'string' },
     periods: { type: 'string' }, apply: { type: 'boolean', default: false },
+    family: { type: 'boolean', default: false }, auto: { type: 'boolean', default: false },
   } });
-  const targets = parsePeriods(values);
-  const { apply } = values;
+  const { apply, family, auto } = values;
+  if ((auto && (!family || ['season','phase','week','periods'].some(field => values[field] !== undefined))) ||
+      (family && !apply)) throw new SyncValidationError('Automatic selection requires family apply mode without explicit periods.');
+  let targets = auto ? [] : parsePeriods(values);
+  if (family && targets.some(period => !inFamily(period))) {
+    throw new SyncValidationError('Production override is outside the 2026 family competition.');
+  }
   const { BALLDONTLIE_API_KEY, SUPABASE_URL, SUPABASE_SECRET_KEY, PICKEM_SYNC_CONFIRM_ORIGIN } = process.env;
   const origin = SUPABASE_URL?.replace(/\/$/, '');
   if (apply && (targets.some(period => period.season < 2026) || !origin || origin !== PICKEM_SYNC_CONFIRM_ORIGIN?.replace(/\/$/, '') ||
@@ -95,20 +130,57 @@ async function main() {
       !/^sb_secret_[A-Za-z0-9_-]+$/.test(SUPABASE_SECRET_KEY ?? ''))) {
     throw new SyncValidationError('Applying requires a confirmed project origin, a backend key, and seasons from 2026 onward.');
   }
-  const client = createClient({ key: BALLDONTLIE_API_KEY });
-  let teams;
-  try {
-    teams = await client.teams();
-  } catch (error) {
-    reportFailure('team validation', error);
-    if (apply) for (const period of targets) await hold(period, origin, SUPABASE_SECRET_KEY);
-    return;
-  }
 
-  // A batch shares one provider client and rate limiter, and a failed period
-  // does not block the remaining ones from receiving fresh leases or results.
-  for (const period of targets) {
-    await syncPeriod({ period, client, teams, apply, origin, key: SUPABASE_SECRET_KEY });
+  try {
+    let schedule;
+    const known = new Set();
+    try {
+      if (auto) {
+        schedule = await fetchScheduleReader();
+        const existing = await readDatabase(origin, SUPABASE_SECRET_KEY, 'weeks', {
+          select: 'week_number,competition_phase,status,seasons!inner(nfl_year)', 'seasons.nfl_year': 'eq.' + familySeason,
+        });
+        if (!Array.isArray(existing)) throw new SyncValidationError('Unexpected competition periods response.');
+        for (const row of existing) known.add(periodKey({ phase: row.competition_phase, week: row.week_number }));
+        targets = selectFamilyPeriods({ schedule: period => schedule(period, { discovery: true }),
+          existing, now: Date.now() });
+      }
+    } catch (error) {
+      reportFailure('schedule discovery', error);
+      if (apply) for (const period of targets) await hold(period, origin, SUPABASE_SECRET_KEY);
+      return;
+    }
+    if (!targets.length) {
+      console.log('No family periods are due for synchronization.');
+      return;
+    }
+
+    let client, teams;
+    try {
+      client = createClient({ key: BALLDONTLIE_API_KEY });
+      teams = await client.teams();
+    } catch (error) {
+      reportFailure('team validation', error);
+      if (apply) for (const period of targets) await hold(period, origin, SUPABASE_SECRET_KEY);
+      return;
+    }
+    if (!schedule) {
+      try { schedule = await fetchScheduleReader(); } catch (error) {
+        reportFailure('independent reconciliation', error);
+        if (apply) for (const period of targets) await hold(period, origin, SUPABASE_SECRET_KEY);
+        return;
+      }
+    }
+    for (const period of targets) {
+      await syncPeriod({ period, client, teams, schedule, apply, family,
+        allowPending: auto && period.phase === 'postseason' && !known.has(periodKey(period)), origin, key: SUPABASE_SECRET_KEY });
+    }
+  } finally {
+    if (family) {
+      try { await monitorLeases(origin, SUPABASE_SECRET_KEY); } catch (error) {
+        reportFailure('lease monitoring', error);
+      }
+    }
   }
 }
 
