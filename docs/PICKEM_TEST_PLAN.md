@@ -64,3 +64,7 @@ Run `node --test tests/supabase-requests.test.mjs`. The tests cover project orig
 ## Phase 4 automated data integration
 
 Run `node --test tests/nfl-sync.test.mjs` for provider pagination, pacing, simulated outages, lifecycle data, reconciliation and period coverage. Run `tests/nfl-sync.sql` through `psql -v ON_ERROR_STOP=1` against a disposable database after installing Phase 4. It tests planned imports, duplicate and incomplete snapshots, synthetic lifecycle updates, kickoff and RLS behavior, correction and postseason standings, and least-privilege grants. The fixture transaction rolls back. The [Phase 4 handoff](PICKEM_PHASE4.md) distinguishes owner-run provider observations and public CSV checks from synthetic tests.
+
+## NFL workflow regression
+
+Run `node --test tests/nfl-automation.test.mjs` with Node 22 or later. The suite checks the repository, branch, environment and scheduling gates, dry-run isolation, batch validation and provider request reuse, recovery from one period’s conflict and outage holds. It uses synthetic HTTP responses and makes no hosted writes.
