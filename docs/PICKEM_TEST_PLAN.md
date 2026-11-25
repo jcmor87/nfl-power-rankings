@@ -72,3 +72,7 @@ Run `node --test tests/nfl-automation.test.mjs` with Node 22 or later. The suite
 ## Family automation regression
 
 Run `node --test tests/family-periods.test.mjs tests/nfl-automation.test.mjs` and execute `tests/family-automation.sql` against a disposable migrated database. Coverage includes the Week 13 floor, prospective activation and roster gating, pending playoff matchups, correction selection, both production write gates, lease alerts and deduplicated GitHub incidents. Notification tests use a local stub and send nothing.
+
+## Phase 5 email and production sign-in
+
+From the repository root run `node --test tests/mail-automation.test.mjs` and `npm test --prefix tests` after installing the test dependencies. Run [mail-automation.sql](../tests/mail-automation.sql) as the database owner in a disposable migrated database. It covers both Pacific DST transitions, rescoring revisions, five verified recipients, canceled and incomplete slates, postseason scope and duplicate claims. The transport tests mock provider responses and concurrent workers. The frontend tests exercise the production login guard and private preview. For release, use the separately approved sender-only test in the owner setup guide and review the responsive template in the owner’s mail client. The provider receives no requests during automated tests.

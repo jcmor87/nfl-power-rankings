@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
+import { supabaseUrl, supabasePublishableKey } from '../pickem/config.mjs';
 
 const html = readFileSync(new URL('../pickem/index.html', import.meta.url), 'utf8');
 let load = 0;
 
-async function withApp(context, respond, exercise) {
-  const dom = new JSDOM(html);
+async function withApp(context, respond, exercise, url) {
+  const dom = new JSDOM(html, { url });
   const timers = new Map();
   const diagnostics = [];
   context.mock.method(globalThis, 'setInterval', (callback, interval) => {
@@ -183,4 +184,25 @@ test('live local Auth and REST sign in both participants against an empty compet
     }
     assert.deepEqual(app.diagnostics, []);
   });
+});
+
+test('production sign-in hides setup and samples and refuses unconfigured requests', async context => {
+  const configured = Boolean(supabaseUrl && supabasePublishableKey);
+  await withApp(context, (path, options) => {
+    assert.ok(configured, 'Unconfigured production must not issue requests');
+    assert.equal(options.headers.apikey, supabasePublishableKey);
+    return answer(path);
+  }, async app => {
+    assert.equal(app.byId('connection').hidden, true);
+    assert.equal(app.byId('demo').hidden, true);
+    assert.equal(app.byId('sign-in').querySelector('button').disabled, !configured);
+    app.byId('demo').click();
+    assert.equal(app.byId('board').hidden, true);
+    await app.signIn();
+    if (configured) assertEmpty(app, 'Synthetic B');
+    else {
+      assert.match(app.byId('status').textContent, /sign-in is not configured/);
+      assert.equal(app.requests.length, 0);
+    }
+  }, 'https://jcmor87.github.io/nfl-power-rankings/pickem/');
 });

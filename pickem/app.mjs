@@ -51,9 +51,12 @@ function element(tag, text) {
   return node;
 }
 
+const production = document.location.hostname === 'jcmor87.github.io';
+const unavailable = 'Competition sign-in is not configured. Contact the organizer.';
+
 function connection() {
-  const url = byId('project').value.trim();
-  const key = byId('publishable-key').value.trim();
+  const url = (production ? supabaseUrl : byId('project').value).trim();
+  const key = (production ? supabasePublishableKey : byId('publishable-key').value).trim();
   if (!/^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(url) ||
       !/^sb_publishable_[A-Za-z0-9_-]+$/.test(key)) return null;
   return { url: url.replace(/\/$/, ''), key };
@@ -375,13 +378,18 @@ function openBoard() {
 
 byId('project').value = supabaseUrl;
 byId('publishable-key').value = supabasePublishableKey;
-byId('connection').open = !connection();
+byId('connection').hidden = byId('demo').hidden = production;
+byId('connection').open = !production && !connection();
+if (production && !connection()) {
+  byId('sign-in').querySelector('button').disabled = true;
+  byId('status').textContent = unavailable;
+}
 byId('sign-in').addEventListener('submit', async event => {
   event.preventDefault();
   const config = connection();
   if (!config) {
-    byId('connection').open = true;
-    byId('status').textContent = 'Enter a Supabase project URL and an sb_publishable_ key.';
+    byId('connection').open = !production;
+    byId('status').textContent = production ? unavailable : 'Enter a Supabase project URL and an sb_publishable_ key.';
     return;
   }
   const form = event.currentTarget;
@@ -438,6 +446,7 @@ for (const button of buttons) button.addEventListener('click', () => {
 });
 
 byId('demo').addEventListener('click', () => {
+  if (production) return;
   state.demo = true;
   state.clockOffset = 0;
   const week = { id: 1, season_id: 1, week_number: 1, status: 'active' };

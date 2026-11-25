@@ -42,3 +42,7 @@ Week 12 is the upcoming full-week candidate as of November 24. If production rea
 ## Phase 2 source follow-up
 
 The direct NFL weekly schedule route and nflverse’s published release were subsequently validated for 2026 Weeks 12 and 13. The [nflverse evaluation](PICKEM_NFLVERSE.md) records the licensing basis, historical schedule and score samples, status gaps and manual official fallback.
+
+## Phase 5 email processing
+
+A protected GitHub Actions workflow polls the service-only mail planning RPC after the hourly NFL synchronization. The database gates reminders in Pacific time and results on completed verified scoring. A transactional claim reserves each period, message kind and recipient. The worker renders HTML and plain text, submits the message to Brevo and records provider acceptance and observed delivery events separately. The private preview supports synthetic data. The production GitHub Pages sign-in uses only the project origin and publishable key.
