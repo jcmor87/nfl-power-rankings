@@ -1,7 +1,7 @@
-# Pick’em development preview
+# Family Pick’em private development preview
 
-Serve the repository as static files and open `/pickem/`. Try sample picks to use the board without credentials. Fictional games render in the browser’s time zone, and selections live in page memory.
+Serve the reviewed feature branch privately and open `/pickem/`. The app can use fictional sample picks or sign in to a configured Supabase project. See the [iPad preview and hosted test guide](../docs/PICKEM_PHASE3.md).
 
-For password sign-in in a private development checkout, edit `config.mjs` to use a disposable hosted Supabase project URL and its publishable key. Apply the migrations and provision a confirmed synthetic Auth user linked to an active participant. The client uses Supabase’s password endpoint and checks access through the participant directory policy. It renders the same fictional board after authentication and never writes picks to Supabase. Sign-out clears local state and requests local-session logout. The committed configuration leaves hosted sign-in disabled.
+The connection form accepts the hosted project URL and an `sb_publishable_` key. With a configured session, the app shows active/completed weeks, Pacific kickoff times, own picks and completed standings. It submits changes through the database RPC and keeps the access token in page memory. Reloading requires a fresh sign-in. The committed deployment defaults are empty.
 
-Keep real accounts and privileged credentials out of the frontend. Passwordless sign-in, persistent picks, live schedules, and results are future work. The link back to Power Rankings is relative to the repository root.
+Keep the hosted preview private and use only the approved temporary accounts. Passwordless sign-in is a future enhancement.

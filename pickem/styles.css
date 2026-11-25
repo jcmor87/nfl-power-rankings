@@ -56,3 +56,16 @@ button.quiet, .choice { background: #0b1a2c; color: #f1f6ff; border-color: #5470
 .kickoff { margin: .6rem 0 1rem; }
 .choices { display: grid; gap: .55rem; }
 .choice { text-align: left; }
+#access { margin-top: 1.25rem; }
+#access #demo { margin-top: 1rem; }
+#connection { margin-top: .8rem; }
+#connection label { display: block; margin-top: .6rem; }
+.sections { display: flex; flex-wrap: wrap; gap: .5rem; margin-block: 1.4rem; }
+.sections button { background: #0b1a2c; color: inherit; border: 1px solid var(--border); }
+.sections button[aria-pressed="true"] { color: #09261c; background: var(--accent); }
+.week-control { display: flex; align-items: center; flex-wrap: wrap; gap: .7rem; margin-bottom: 1rem; }
+select { color: inherit; background: #112338; border: 1px solid #54708e; padding: .45rem; min-height: 2.75rem; font: inherit; border-radius: .5rem; }
+.game-status { color: var(--muted); margin: .6rem 0 0; font-size: .875rem; }
+.choice:disabled { cursor: default; opacity: .7; }
+.result-list { margin: 1rem 0; padding: 0; list-style: none; }
+.result-list li { padding: .75rem .4rem; border-bottom: 1px solid var(--border); }

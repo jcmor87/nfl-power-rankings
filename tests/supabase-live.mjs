@@ -12,6 +12,15 @@ if (!origin || origin !== PICKEM_TEST_CONFIRM_ORIGIN || !PICKEM_TEST_PUBLIC_KEY 
   throw new Error('Set all four PICKEM_TEST variables for one disposable Supabase project.');
 }
 
+const existingAccounts = process.argv.includes('--hosted-existing');
+const administeredAccounts = [1, 2].map(i => ({
+  email: process.env['PICKEM_TEST_EMAIL_' + i],
+  password: process.env['PICKEM_TEST_PASSWORD_' + i],
+}));
+if (existingAccounts && administeredAccounts.some(account => !account.email || !account.password)) {
+  throw new Error('Enter both synthetic accounts through the private runner.');
+}
+
 const admin = { key: PICKEM_TEST_SERVICE_KEY };
 const anonymous = { key: PICKEM_TEST_PUBLIC_KEY };
 const namespace = 'synthetic-' + randomUUID();
@@ -38,8 +47,8 @@ async function request(label, path, { actor = anonymous, method = 'GET', body, p
   const accepted = Array.isArray(status) ? status.includes(response.status) :
     status === undefined ? response.ok : response.status === status;
   // Log HTTP and database error codes only. Response bodies can contain credentials.
-  assert.ok(accepted, label + ' returned HTTP ' + response.status + ' (' + (value?.code ?? '-') + ')');
-  if (code) assert.equal(value?.code, code, label + ' SQLSTATE');
+  assert.ok(accepted, label + ' returned HTTP ' + response.status + ' (' + (value?.error_code ?? value?.code ?? '-') + ')');
+  if (code) assert.equal(value?.error_code ?? value?.code, code, label + ' error code');
   return { value, serverTime: Date.parse(response.headers.get('date')) };
 }
 
@@ -72,11 +81,15 @@ async function createIdentity(index) {
   assert.ok(user.id, 'Synthetic Auth user created');
   cleanup.push(() => request('Cleanup Auth user', '/auth/v1/admin/users/' + user.id,
     { actor: admin, method: 'DELETE' }));
+  return signIn({ email, password }, user.id);
+}
+
+async function signIn({ email, password }, expectedId) {
   const { value: session } = await request('Sign in with password', '/auth/v1/token?grant_type=password', {
     method: 'POST', body: { email, password },
   });
-  assert.ok(session.access_token && session.user.id === user.id, 'Auth returned the expected session');
-  return { id: user.id, key: anonymous.key, token: session.access_token };
+  assert.ok(session.access_token && session.user.id && (!expectedId || session.user.id === expectedId), 'Auth returned the expected session');
+  return { id: session.user.id, key: anonymous.key, token: session.access_token };
 }
 
 const read = async (actor, path) => (await request('Read ' + path.split('?')[0], '/rest/v1/' + path,
@@ -87,19 +100,42 @@ const submit = (actor, game, team, expected = {}) => request('Submit pick', '/re
 });
 
 async function run() {
-  for (const table of ['participants', 'seasons', 'weeks', 'teams', 'games', 'picks',
+  for (const table of ['seasons', 'weeks', 'teams', 'games', 'picks',
     'weekly_results', 'season_standings', 'email_log', 'job_runs', 'audit_log']) {
     assert.equal((await read(admin, table + '?limit=1')).length, 0,
-      'Use a disposable project with empty Pick’em tables');
+      'Run before any competition data exist');
   }
-  const { value: authUsers } = await request('Check disposable Auth project',
-    '/auth/v1/admin/users?page=1&per_page=1', { actor: admin });
-  assert.equal(authUsers.users?.length, 0, 'Use a disposable project with no existing Auth users');
-  const alice = await createIdentity(1);
-  const bob = await createIdentity(2);
-  const outsider = await createIdentity(3);
-  const a = await insert('participants', { auth_user_id: alice.id, display_name: 'Synthetic A', seat: 1, active: true });
-  const b = await insert('participants', { auth_user_id: bob.id, display_name: 'Synthetic B', seat: 2, active: true });
+  const enrolled = await read(admin, 'participants?select=id,auth_user_id,seat,active&order=seat');
+  let alice, bob, outsider, a, b;
+  if (existingAccounts) {
+    assert.equal(enrolled.length, 2, 'Only two temporary participants may be enrolled');
+    assert.ok(enrolled.every((row, i) => row.seat === i + 1 && row.active),
+      'Temporary seats 1 and 2 must be active');
+    assert.equal(administeredAccounts[0].email, 'pickem-test1@example.com', 'Use only the approved temporary accounts');
+    assert.equal(administeredAccounts[1].email, 'pickem-test2@example.com', 'Use only the approved temporary accounts');
+    [a, b] = enrolled;
+    alice = await signIn(administeredAccounts[0], a.auth_user_id);
+    bob = await signIn(administeredAccounts[1], b.auth_user_id);
+    const { value: users } = await request('Check hosted Auth accounts',
+      '/auth/v1/admin/users?page=1&per_page=3', { actor: admin });
+    assert.equal(users.users?.length, 2, 'Only the two temporary Auth users may exist');
+    // Public signup uses the same confirmed synthetic identity, with no real recipient.
+    await request('Public signup disabled', '/auth/v1/signup', { method: 'POST',
+      body: { email: administeredAccounts[0].email, password: randomUUID() + 'aZ9!' }, status: 422,
+      code: 'signup_disabled' });
+    // A separate auto-confirmed identity exercises a valid but unlinked Auth token.
+    outsider = await createIdentity(3);
+  } else {
+    assert.deepEqual(enrolled, [], 'Use a disposable project with no Pick’em participants');
+    const { value: users } = await request('Check disposable Auth project',
+      '/auth/v1/admin/users?page=1&per_page=1', { actor: admin });
+    assert.equal(users.users?.length, 0, 'Use a disposable project with no existing Auth users');
+    alice = await createIdentity(1);
+    bob = await createIdentity(2);
+    outsider = await createIdentity(3);
+    a = await insert('participants', { auth_user_id: alice.id, display_name: 'Synthetic A', seat: 1, active: true });
+    b = await insert('participants', { auth_user_id: bob.id, display_name: 'Synthetic B', seat: 2, active: true });
+  }
   const season = await insert('seasons', { nfl_year: 2999 });
   const week = await insert('weeks', { season_id: season.id, week_number: 1, status: 'active', expected_games: 2 });
   const home = await insert('teams', { abbreviation: 'SYN-A', name: 'Synthetic Home' });
@@ -131,7 +167,9 @@ async function run() {
   await request('Operational ledger access', '/rest/v1/email_log',
     { actor: alice, status: 403, code: '42501' });
 
+  await submit(bob, game, home);
   await submit(bob, game, away);
+  assert.equal((await read(bob, 'picks?game_id=eq.' + game.id))[0].team_id, away.id);
   await submit(alice, game, home);
   const own = 'picks?game_id=eq.' + game.id;
   const peer = own + '&participant_id=eq.' + b.id;
@@ -147,6 +185,15 @@ async function run() {
     { actor: alice, method: 'PATCH', body: { final_verified_at: future }, status: 403, code: '42501' });
   assert.deepEqual((await read(alice, own)).map(pick => pick.participant_id), [a.id]);
   assert.deepEqual(await read(alice, peer), []);
+  if (existingAccounts || process.argv.includes('--phase3')) {
+    const { value } = await request('Read current participant identity', '/rest/v1/rpc/pickem_identity',
+      { actor: alice, method: 'POST', body: {} });
+    assert.equal(value[0].participant_id, a.id);
+    assert.equal((await read(alice, 'picks?participant_id=eq.' + a.id + '&games.week_id=eq.' + week.id +
+      '&select=game_id,team_id,games!inner(week_id)')).length, 1);
+    assert.deepEqual(await read(alice, 'weekly_results?select=week_id,participant_id,points,rank,weeks!inner(season_id,week_number)' +
+      '&weeks.season_id=eq.' + season.id), []);
+  }
   assert.deepEqual(await read(outsider, own), []);
   await submit(alice, game, third, { status: 400, code: '22023' });
   console.log('PASS restricted columns, write denial and pre-final privacy');
@@ -168,6 +215,11 @@ async function run() {
   const boundaryPicks = await read(alice, 'picks?game_id=eq.' + boundary.id);
   assert.equal(boundaryPicks.length, 1);
   assert.equal(boundaryPicks[0].team_id, home.id, 'Late write preserves the prior pick');
+  if (existingAccounts || process.argv.includes('--phase3')) {
+    const moved = await patch('games', boundary.id, { kickoff_at: future });
+    assert.ok(moved.picks_locked_at, 'Moving a lapsed kickoff preserves its lock');
+    await submit(alice, boundary, third, { status: 400, code: '22023' });
+  }
   console.log('PASS concurrent submissions and kickoff crossing');
 
   const finalTime = new Date().toISOString();
@@ -177,6 +229,7 @@ async function run() {
   assert.deepEqual(await read(alice, peer), [], 'Unverified final still hides the peer pick');
   await patch('games', game.id, { final_verified_at: finalTime });
   assert.equal((await read(alice, peer)).length, 1, 'Verified final reveals the peer pick');
+  if (existingAccounts) cleanup.push(() => patch('participants', a.id, { active: true }));
   await patch('participants', a.id, { active: false });
   assert.deepEqual(await read(alice, own), [], 'Existing token immediately loses access');
   assert.deepEqual(await read(alice, 'games'), []);

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
-  <title>Family Pick’em | Development preview</title>
+  <title>Family Pick’em</title>
   <link rel="stylesheet" href="./styles.css">
   <script type="module" src="./app.mjs"></script>
 </head>
@@ -12,39 +12,52 @@
   <header class="site-header">
     <div class="shell header-content">
       <a href="../">Power Rankings</a>
-      <span class="preview">Development preview</span>
+      <button id="exit" type="button" class="quiet" hidden>Sign out</button>
     </div>
   </header>
   <main class="shell">
     <h1>Family Pick’em</h1>
-    <p class="intro">Try the picks board with fictional teams and matchups.</p>
+    <p id="status" role="status"></p>
 
     <section id="access" class="panel" aria-labelledby="access-title">
-      <h2 id="access-title">Open the picks board</h2>
-      <div class="access-actions">
-        <button type="button" id="demo">Try sample picks</button>
-      </div>
-      <form id="sign-in" hidden>
-        <h3>Sign in to the test project</h3>
+      <h2 id="access-title">Sign in</h2>
+      <details id="connection">
+        <summary>Supabase connection</summary>
+        <label for="project">Project URL</label>
+        <input id="project" form="sign-in" type="url" placeholder="https://PROJECT.supabase.co">
+        <label for="publishable-key">Publishable key</label>
+        <input id="publishable-key" form="sign-in" autocomplete="off" spellcheck="false" placeholder="sb_publishable_…">
+      </details>
+      <form id="sign-in">
         <label for="email">Email</label>
         <input id="email" name="email" type="email" autocomplete="username" required>
         <label for="password">Password</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required>
         <button type="submit">Sign in</button>
       </form>
-      <p id="auth-status" role="status"></p>
+      <button type="button" id="demo" class="quiet">Try sample picks</button>
     </section>
 
-    <section id="board" hidden aria-labelledby="board-title">
-      <div class="board-header">
-        <div>
-          <h2 id="board-title">Sample matchups</h2>
-          <p id="progress">0 of 3 picks made</p>
-        </div>
-        <button type="button" id="exit" class="quiet">Exit preview</button>
+    <section id="board" hidden>
+      <nav class="sections" aria-label="Competition">
+        <button type="button" data-section="picks" aria-pressed="true">Make Picks</button>
+        <button type="button" data-section="weekly" aria-pressed="false">Weekly Results</button>
+        <button type="button" data-section="season" aria-pressed="false">Season Standings</button>
+        <button type="button" data-section="history" aria-pressed="false">Competition History</button>
+      </nav>
+      <div class="week-control">
+        <label for="week">Competition week</label>
+        <select id="week"></select>
       </div>
-      <div id="games" class="games"></div>
-      <p id="pick-status" role="status"></p>
+      <section aria-labelledby="board-title">
+        <div class="board-header">
+          <h2 id="board-title" tabindex="-1">Make Picks</h2>
+          <p id="progress"></p>
+        </div>
+        <div id="games" class="games"></div>
+        <div id="results"></div>
+        <p id="pick-status" role="status"></p>
+      </section>
     </section>
   </main>
 </body>

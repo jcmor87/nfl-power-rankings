@@ -42,3 +42,11 @@ The harness refuses a nonempty project, creates two linked synthetic participant
 The suite checks API write denial, restricted columns, pick privacy during scheduled and in-progress states and unverified finals, disclosure after verified final, immediate revocation with the existing access token, and concurrent upserts. It submits a pick before kickoff and repeats immediately after crossing the observed server deadline. Network timing cannot assert exact microsecond equality with the database clock.
 
 November 24, 2026 verification used disposable PostgreSQL 17, Supabase Auth (GoTrue 2.185.0), and PostgREST 13.0.7. Auth tokens came from password sign-in. The hosted Supabase gateway and the owner’s project were outside this test run.
+
+## Phase 3 local results
+
+Applied all five migrations on local PostgreSQL 17 alongside GoTrue 2.185.0 and PostgREST 13.0.7. Ran the API harness against that stack in clean-fixture and existing-account modes. The existing-account run verified the signup-disabled response for the synthetic project, actual password sessions, own-pick query shape, privacy, mutation denial, late-pick rejection, the reschedule lock, immediate revocation and cleanup.
+
+Run `node --test tests/phase3.test.mjs` for provider normalization and mail tests. Run [scoring.sql](../tests/scoring.sql) as owner in a disposable migrated test database for shared ranks, missed/tied/canceled games, postponement gating, idempotent rescoring and corrections, and mail claim retries. Its fixtures roll back. These tests passed locally. The manual preview fixture and cleanup also executed locally and retained the two Auth accounts for separate deletion.
+
+DOM checks passed for the app sections, Pacific kickoff formatting, own-pick saves, mocked sign-in/revocation response/logout, and the Power Rankings league/conference/division filters. Native iPhone/iPad layouts and the owner’s hosted gateway remain launch checks. No email transport was exercised.
