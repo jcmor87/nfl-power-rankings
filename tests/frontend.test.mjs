@@ -105,6 +105,30 @@ test('postseason periods display round names and sort after regular-season weeks
   });
 });
 
+test('a disputed kickoff shows both sources and locks at the earlier deadline', async context => {
+  const game = { id: 7, source: 'balldontlie', status: 'scheduled', home_team_id: 1, away_team_id: 2,
+    kickoff_at: '2026-11-25T00:10:00Z', reference_kickoff_at: '2026-11-24T23:55:00Z',
+    pick_deadline_at: '2026-11-24T23:55:00Z', kickoff_reconciliation: 'earlier_deadline',
+    schedule_verified_until: '2026-11-25T01:00:00Z' };
+  await withApp(context, path => {
+    if (path === '/rest/v1/games') return Response.json([game]);
+    if (['teams', 'picks', 'weekly_results', 'season_standings'].some(table => path === '/rest/v1/' + table)) {
+      return Response.json([]);
+    }
+    return answer(path, { '/rest/v1/weeks': [{ id: 1, season_id: 1, week_number: 12, status: 'active' }],
+      '/rest/v1/seasons': [{ id: 1, nfl_year: 2026 }] });
+  }, async app => {
+    await app.signIn();
+    const rendered = app.byId('games').textContent;
+    assert.match(rendered, /BALLDONTLIE kickoff/);
+    assert.match(rendered, /nflverse kickoff/);
+    assert.match(rendered, /Conservative pick deadline/);
+    assert.match(rendered, /Picks locked/);
+    assert.ok([...app.byId('games').querySelectorAll('button')].every(button => button.disabled));
+    assert.deepEqual(app.diagnostics, []);
+  });
+});
+
 test('unexpected successful response shape reports a safe operation and error category', async context => {
   let invalid = true;
   await withApp(context, path => invalid && path === '/rest/v1/weeks' ?

@@ -43,7 +43,11 @@ try {
   const reference = await fetchSchedule(period);
   const snapshot = reconcile({ ...period, teams, observations, reference });
   console.log(JSON.stringify({ mode: apply ? 'apply' : 'dry-run', ...period, teams: snapshot.teams.length,
-    games: snapshot.games.length, statuses: Object.fromEntries([...new Set(snapshot.games.map(game => game.status))]
+    games: snapshot.games.length,
+    kickoff_discrepancies: snapshot.games.filter(game => game.kickoff_reconciliation === 'earlier_deadline')
+      .map(({ away, home, kickoff_at, reference_kickoff_at, pick_deadline_at, kickoff_reconciliation }) =>
+        ({ away, home, kickoff_at, reference_kickoff_at, pick_deadline_at, kickoff_reconciliation })),
+    statuses: Object.fromEntries([...new Set(snapshot.games.map(game => game.status))]
       .map(status => [status, snapshot.games.filter(game => game.status === status).length])) }));
   if (apply) {
     stage = 'database synchronization';

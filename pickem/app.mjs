@@ -186,7 +186,7 @@ async function loadWeek() {
       operation = 'load-week';
     }
     const [games, teams, picks, weekly, season, historyWeeks] = await Promise.all([
-      restRows('games?select=id,home_team_id,away_team_id,kickoff_at,started_at,status,source,schedule_verified_until,picks_locked_at,final_verified_at,cancellation_verified_at,home_score,away_score&week_id=eq.' + week.id + '&order=kickoff_at.asc.nullslast,id.asc'),
+      restRows('games?select=id,home_team_id,away_team_id,kickoff_at,reference_kickoff_at,pick_deadline_at,kickoff_reconciliation,started_at,status,source,schedule_verified_until,picks_locked_at,final_verified_at,cancellation_verified_at,home_score,away_score&week_id=eq.' + week.id + '&order=kickoff_at.asc.nullslast,id.asc'),
       restRows('teams?select=id,name'),
       restRows('picks?participant_id=eq.' + encodeURIComponent(state.identity) +
         '&games.week_id=eq.' + week.id + '&select=game_id,team_id,games!inner(week_id)'),
@@ -215,9 +215,9 @@ async function loadWeek() {
 function locked(game, week) {
   const serverTime = Date.now() + state.clockOffset;
   return week.status !== 'active' ||
-    (game.source === 'balldontlie' && (!game.schedule_verified_until ||
+    (game.source === 'balldontlie' && (!game.reference_kickoff_at || !game.schedule_verified_until ||
       serverTime >= Date.parse(game.schedule_verified_until))) || game.status !== 'scheduled' || game.started_at ||
-    game.picks_locked_at || !game.kickoff_at || serverTime >= Date.parse(game.kickoff_at);
+    game.picks_locked_at || !game.kickoff_at || serverTime >= Date.parse(game.pick_deadline_at ?? game.kickoff_at);
 }
 
 function renderGames(data) {
@@ -229,11 +229,19 @@ function renderGames(data) {
     const home = data.teams.get(game.home_team_id) ?? 'Home team';
     const away = data.teams.get(game.away_team_id) ?? 'Away team';
     card.append(element('h3', away + ' at ' + home));
-    const time = element('time', game.kickoff_at ? pacific.format(new Date(game.kickoff_at)) : 'Kickoff to be confirmed');
+    const kickoffText = game.kickoff_at ? pacific.format(new Date(game.kickoff_at)) : 'Kickoff to be confirmed';
+    const disputed = game.kickoff_reconciliation === 'earlier_deadline';
+    const time = element('time', disputed ? 'BALLDONTLIE kickoff: ' + kickoffText : kickoffText);
     if (game.kickoff_at) time.dateTime = game.kickoff_at;
     const kickoff = element('p');
     kickoff.className = 'kickoff';
     kickoff.append(time);
+    if (disputed) {
+      kickoff.append(
+        element('br'), element('span', 'nflverse kickoff: ' + pacific.format(new Date(game.reference_kickoff_at))),
+        element('br'), element('span', 'Conservative pick deadline: ' + pacific.format(new Date(game.pick_deadline_at))),
+      );
+    }
     const choices = element('div');
     choices.className = 'choices';
     for (const id of [game.away_team_id, game.home_team_id]) {

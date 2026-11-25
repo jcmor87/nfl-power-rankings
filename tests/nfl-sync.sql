@@ -29,7 +29,7 @@ begin
 
   select jsonb_agg(jsonb_build_object('provider_id', (100+idx)::text, 'reference_id', 'fixture-'||idx,
     'home',directory->(idx*2)->>'code','away',directory->(idx*2+1)->>'code',
-    'status','scheduled','kickoff_at',future,'observed_at',past) order by idx)
+    'status','scheduled','kickoff_at',future,'reference_kickoff_at',future,'observed_at',past) order by idx)
   into schedule from generate_series(0,2) idx;
   regular := jsonb_build_object('season',2999,'phase','regular','week',1,'teams',directory,'games',schedule);
   perform public.sync_pickem_nfl_week(regular);
@@ -54,7 +54,7 @@ begin
 
   select jsonb_agg(jsonb_build_object('provider_id',(200+idx)::text,'reference_id','playoff-'||idx,
     'home',directory->(idx*2)->>'code','away',directory->(idx*2+1)->>'code',
-    'status','scheduled','kickoff_at',future,'observed_at',past) order by idx)
+    'status','scheduled','kickoff_at',future,'reference_kickoff_at',future,'observed_at',past) order by idx)
   into schedule from generate_series(0,5) idx;
   playoff := jsonb_build_object('season',2999,'phase','postseason','week',1,'teams',directory,'games',schedule);
   perform public.sync_pickem_nfl_week(playoff);
@@ -93,13 +93,44 @@ begin
     execute 'reset role';
   end loop;
 
-  update public.games set kickoff_at=past where id=game_id;
+  -- Create a discrepancy with an earlier deadline soon enough to test crossing it.
   regular := jsonb_set(regular,'{games,0}',regular#>'{games,0}' ||
-    jsonb_build_object('status','postponed','kickoff_at',null,'observed_at',past + interval '10 minutes'));
+    jsonb_build_object('kickoff_at',clock_timestamp() + interval '10 minutes',
+      'reference_kickoff_at',clock_timestamp() + interval '1 second',
+      'observed_at',past + interval '5 minutes'));
+  perform public.sync_pickem_nfl_week(regular);
+  assert (select picks_locked_at from public.games where id=game_id) is null;
+  assert (select kickoff_reconciliation from public.games where id=game_id) = 'earlier_deadline';
+  assert exists (select 1 from public.audit_log
+    where details->'after'->>'kickoff_reconciliation'='earlier_deadline'
+      and details->'after'->>'kickoff_at' is distinct from details->'after'->>'reference_kickoff_at'
+      and details->'after'->>'pick_deadline_at'=details->'after'->>'reference_kickoff_at');
+  begin
+    update public.games g set reference_kickoff_at=g.kickoff_at - interval '901 seconds'
+      where g.id=game_id;
+    raise exception 'Out-of-tolerance evidence stored' using errcode='XX000';
+  exception when check_violation then null;
+  end;
+  perform pg_sleep(1.1);
+  execute 'set local role authenticated';
+  begin
+    perform public.submit_pick(game_id,home_team);
+    raise exception 'Pick accepted after the earlier deadline' using errcode='XX000';
+  exception when invalid_parameter_value then null;
+  end;
+  execute 'reset role';
+  -- The first reschedule after the earlier deadline must freeze the old lock.
+  regular := jsonb_set(regular,'{games,0}',regular#>'{games,0}' ||
+    jsonb_build_object('reference_kickoff_at',regular#>'{games,0,kickoff_at}'));
+  perform public.sync_pickem_nfl_week(regular);
+  assert (select picks_locked_at from public.games where id=game_id) is not null;
+
+  regular := jsonb_set(regular,'{games,0}',regular#>'{games,0}' ||
+    jsonb_build_object('status','postponed','kickoff_at',past,'reference_kickoff_at',past,'observed_at',past + interval '10 minutes'));
   perform public.sync_pickem_nfl_week(regular);
   assert (select status from public.games where id=game_id) = 'postponed';
   regular := jsonb_set(regular,'{games,0}',regular#>'{games,0}' ||
-    jsonb_build_object('status','scheduled','kickoff_at',future,'observed_at',past + interval '20 minutes'));
+    jsonb_build_object('status','scheduled','kickoff_at',future,'reference_kickoff_at',future,'observed_at',past + interval '20 minutes'));
   perform public.sync_pickem_nfl_week(regular);
   assert (select id from public.games where source_game_id='100') = game_id;
   assert (select picks_locked_at from public.games where id=game_id) is not null;
@@ -112,11 +143,11 @@ begin
   execute 'reset role';
 
   regular := jsonb_set(regular,'{games,0}',regular#>'{games,0}' ||
-    jsonb_build_object('status','final','kickoff_at',past,'observed_at',past + interval '30 minutes','home_score',14,'away_score',7));
+    jsonb_build_object('status','final','kickoff_at',past,'reference_kickoff_at',past,'observed_at',past + interval '30 minutes','home_score',14,'away_score',7));
   regular := jsonb_set(regular,'{games,1}',regular#>'{games,1}' ||
-    jsonb_build_object('status','final','kickoff_at',past,'observed_at',past + interval '30 minutes','home_score',7,'away_score',7));
+    jsonb_build_object('status','final','kickoff_at',past,'reference_kickoff_at',past,'observed_at',past + interval '30 minutes','home_score',7,'away_score',7));
   regular := jsonb_set(regular,'{games,2}',regular#>'{games,2}' ||
-    jsonb_build_object('status','canceled','kickoff_at',null,'observed_at',past + interval '30 minutes'));
+    jsonb_build_object('status','canceled','kickoff_at',past,'reference_kickoff_at',past,'observed_at',past + interval '30 minutes'));
   perform public.sync_pickem_nfl_week(regular);
   assert (select status from public.weeks where id=period_id) = 'complete';
   assert (select count(*) from public.weekly_results where week_id=period_id and points=1 and rank=1) = 2;
@@ -152,7 +183,7 @@ begin
   execute 'reset role';
   for i in 0..5 loop
     playoff := jsonb_set(playoff,array['games',i::text],playoff#>array['games',i::text] ||
-      jsonb_build_object('status','final','kickoff_at',past,'observed_at',past + interval '30 minutes','home_score',14,'away_score',7));
+      jsonb_build_object('status','final','kickoff_at',past,'reference_kickoff_at',past,'observed_at',past + interval '30 minutes','home_score',14,'away_score',7));
   end loop;
   perform public.sync_pickem_nfl_week(playoff);
   assert (select points from public.season_standings standings where season_id=season_key

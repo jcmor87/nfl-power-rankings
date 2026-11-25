@@ -25,7 +25,7 @@ A fresh public CSV download parsed successfully. It contained 16 and 14 schedule
 )
 ```
 
-3. Repeat with Week 13 or with `--season=2025 --phase=postseason --week=5` to sample the Super Bowl. Dry runs report aggregate counts only. An incomplete, malformed or contradictory snapshot returns a nonzero exit and no write. If outbound connections require the environment’s HTTP proxy, Node.js 22.21+/24 supports `NODE_USE_ENV_PROXY=1`. Use it only in that environment. [Node CLI documentation](https://nodejs.org/api/cli.html#node_use_env_proxy1)
+3. Repeat with Week 13 or with `--season=2025 --phase=postseason --week=5` to sample the Super Bowl. Dry runs report aggregate counts and any kickoff disagreements with both source times and the chosen deadline. An incomplete, malformed or contradictory snapshot returns a nonzero exit and no write. If outbound connections require the environment’s HTTP proxy, Node.js 22.21+/24 supports `NODE_USE_ENV_PROXY=1`. Use it only in that environment. [Node CLI documentation](https://nodejs.org/api/cli.html#node_use_env_proxy1)
 4. Keep `--apply` out of all validation commands. It is deliberately explicit and requires a matching `SUPABASE_URL` and `PICKEM_SYNC_CONFIRM_ORIGIN`, a backend `SUPABASE_SECRET_KEY`, and year 2026 or later. It sends one atomic snapshot RPC for the requested period. On a failed apply it attempts the separate idempotent schedule hold without replaying the write.
 
 ## Database upgrade and operating model
@@ -52,3 +52,15 @@ The planned production cadence is an hourly coordinated job for the current appr
 - [ ] Leave email delivery disabled until its separate acceptance checks pass.
 
 Week 12 opens November 25 at 5:00 p.m. Pacific. The unresolved production gates make it unsuitable unless all are cleared before that kickoff. If the deadline passes, recommend Week 13 if readiness is established before its first kickoff, December 3 at 5:15 p.m. Pacific. Week 13 also requires owner approval. [Official Week 12 schedule](https://www.nfl.com/schedules/2026/by-week/week-12) · [Official Week 13 schedule](https://www.nfl.com/schedules/2026/by-week/week-13)
+
+## Kickoff evidence and official week assignments
+
+The two feeds must identify the same home and away teams in the requested period. When their kickoff instants are identical, the decision is `exact`. A disagreement of up to 15 minutes uses the earlier instant solely as a conservative pick deadline. The original BALLDONTLIE timestamp stays in `kickoff_at`, nflverse stays in `reference_kickoff_at`, and the database derives `pick_deadline_at` and `kickoff_reconciliation`. The frontend labels a disagreement and displays both reported kickoff times and the separate deadline. Dry-run output and database change audits retain both timestamps and the decision. Differences above 15 minutes, missing timestamps, mismatched matchups and conflicting final scores stop the sync. Cancellations still require explicit independent evidence.
+
+The 2026 regular-season matchup table comes from the NFL’s official By Week schedule. We compared all 272 matchup assignments across all 18 weeks with the published nflverse release. For 2026 regular-season syncs the code requires the selected week’s official matchup set, an exact match from nflverse, and the same matchups from BALLDONTLIE before any database write. This uses published fixtures and makes no extra NFL request during a sync. An official cross-week reassignment requires updated official schedule evidence, and the importer rejects a remap while that is unresolved. The owner previously ran the two-provider dry runs for Weeks 11 and 12. Rerun the chosen launch week on the updated branch to apply the official check to authenticated BALLDONTLIE data. [Official 2026 NFL schedule release](https://media.nfl.com/football-information/2026/news/2026-nfl-schedule-announced)
+
+### Install the incremental kickoff migration
+
+Dry runs need no database migration. Before a future authorized write or a frontend preview that loads game data, verify Phase 4, then run the complete [kickoff evidence installer](../supabase/checks/install_pickem_kickoff_evidence.sql) once as postgres in the Supabase SQL Editor. It verifies the installed baseline versions and function bodies, applies migration `20261125000600` atomically, records the version, and reloads PostgREST. Run [kickoff evidence verification](../supabase/checks/verify_pickem_kickoff_evidence.sql) separately and expect 17 passing rows. The older Phase 4 verifier is for the pre-upgrade state.
+
+The migration preserves existing games, picks and locks. Existing scheduled BALLDONTLIE games need fresh paired evidence before accepting new picks. A future reschedule cannot clear a permanent lock or reopen a previously passed earlier deadline. The three-hour schedule verification lease, failure holds and RLS remain enforced.
