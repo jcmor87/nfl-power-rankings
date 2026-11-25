@@ -1,50 +1,73 @@
--- Optional recovery after the automated test cleanup, before any real enrollment.
--- Auth users remain for deletion in the Dashboard once this transaction succeeds.
+-- Removes only the browser fixture created by create_preview_fixture.sql.
+-- The preexisting temporary participant links and Auth accounts are preserved.
 begin;
 set local lock_timeout = '5s';
+set local statement_timeout = '30s';
+set local timezone = 'UTC';
+
+lock table public.participants, public.seasons, public.weeks, public.teams, public.games,
+  public.picks, public.weekly_results, public.season_standings, public.email_log,
+  public.job_runs, public.audit_log in share row exclusive mode;
 
 do $$
 declare
+  fixture_source constant text := 'pickem-browser-preview-v1';
+  marker constant text := 'pickem_browser_preview_v1';
+  fixture public.audit_log;
+  season_key bigint;
+  week_key bigint;
+  team_keys bigint[];
+  game_keys bigint[];
   test_ids uuid[];
-  fixture_season bigint;
+  baseline jsonb := '{}'::jsonb;
+  relation_name text;
+  digest text;
+  changed_tables text;
 begin
-  if exists (select 1 from public.seasons where nfl_year <> 2999) then
-    raise exception 'Cleanup refused because another season exists';
-  end if;
-  select array_agg(p.id) into test_ids
-  from public.participants p join auth.users u on u.id = p.auth_user_id
-  where (p.seat = 1 and u.email = 'pickem-test1@example.com')
-     or (p.seat = 2 and u.email = 'pickem-test2@example.com');
-
-  if exists (select 1 from public.participants where not coalesce(id = any(test_ids), false)) then
-    raise exception 'Cleanup refused because another participant exists';
-  end if;
-
-  select id into fixture_season from public.seasons where nfl_year = 2999;
-  if exists (
-    select 1 from public.games g join public.weeks w on w.id = g.week_id
-    where w.season_id = fixture_season and
-      (g.source !~ '^synthetic-[0-9a-f-]{36}$' or g.source_game_id not in ('privacy', 'boundary'))
-  ) then raise exception 'Unexpected games in synthetic season'; end if;
-
-  if exists (select 1 from public.weekly_results)
-    or exists (select 1 from public.season_standings)
-    or exists (select 1 from public.email_log)
-    or exists (select 1 from public.audit_log)
-    or exists (select 1 from public.job_runs) then
-    raise exception 'Unexpected dependent records; review them before cleanup';
+  select * into strict fixture from public.audit_log where action = marker;
+  season_key := (fixture.details->>'season_id')::bigint;
+  week_key := (fixture.details->>'week_id')::bigint;
+  select array_agg(value::bigint) into team_keys from jsonb_array_elements_text(fixture.details->'team_ids');
+  select array_agg(value::bigint) into game_keys from jsonb_array_elements_text(fixture.details->'game_ids');
+  select array_agg(value::uuid) into test_ids from jsonb_array_elements_text(fixture.details->'participant_ids');
+  if cardinality(team_keys) is distinct from 6 or cardinality(game_keys) is distinct from 3
+     or cardinality(test_ids) is distinct from 2
+     or not exists (select 1 from public.seasons where id = season_key and nfl_year = 2999)
+     or not exists (select 1 from public.weeks where id = week_key and season_id = season_key
+                    and competition_phase = 'regular' and week_number = 1)
+     or (select count(*) from public.teams where id = any(team_keys) and abbreviation in
+       ('SYN-PH','SYN-PA','SYN-BH','SYN-BA','SYN-LH','SYN-LA') and name like 'Synthetic %') <> 6
+     or (select count(*) from public.games where id = any(game_keys) and week_id = week_key
+          and source = fixture_source and source_game_id in ('persistence','boundary','locked')
+          and reference_game_id = fixture_source || ':' || source_game_id
+          and home_team_id = any(team_keys) and away_team_id = any(team_keys)) <> 3
+     or exists (select 1 from public.picks where game_id = any(game_keys)
+                and not (participant_id = any(test_ids))) then
+    raise exception 'Cleanup refused because the recorded browser fixture identities do not match';
   end if;
 
-  delete from public.picks p using public.games g, public.weeks w
-  where p.game_id = g.id and g.week_id = w.id and w.season_id = fixture_season
-    and p.participant_id = any(test_ids);
-  delete from public.games g using public.weeks w where g.week_id = w.id and w.season_id = fixture_season;
-  delete from public.weeks where season_id = fixture_season and week_number = 1;
-  delete from public.seasons where id = fixture_season;
-  delete from public.teams where (abbreviation, name) in (
-    ('SYN-A','Synthetic Home'), ('SYN-B','Synthetic Away'), ('SYN-C','Synthetic Third'));
-  delete from public.participants where id = any(test_ids);
+  -- Foreign keys reject cleanup if unanticipated related records exist.
+  delete from public.picks where game_id = any(game_keys) and participant_id = any(test_ids);
+  delete from public.games where id = any(game_keys) and source = fixture_source;
+  delete from public.weeks where id = week_key and season_id = season_key;
+  delete from public.seasons where id = season_key and nfl_year = 2999;
+  delete from public.teams where id = any(team_keys);
+  delete from public.audit_log where id = fixture.id and action = marker;
+
+  foreach relation_name in array array['participants','seasons','weeks','teams','games','picks',
+    'weekly_results','season_standings','email_log','job_runs','audit_log'] loop
+    execute format(
+      'select md5(coalesce(string_agg(to_jsonb(t)::text, chr(10) order by to_jsonb(t)::text collate "C"), '''')) from public.%I t',
+      relation_name) into digest;
+    baseline := baseline || jsonb_build_object(relation_name, digest);
+  end loop;
+  if baseline is distinct from fixture.details->'baseline' then
+    select string_agg(key, ', ' order by key) into changed_tables
+    from jsonb_each(baseline) where value is distinct from fixture.details->'baseline'->key;
+    raise exception 'Cleanup rolled back because preexisting row digests differ in: %', changed_tables;
+  end if;
 end;
 $$;
 
+select 'Browser fixture removed. Existing competition rows and participant links verified unchanged.' as result;
 commit;
